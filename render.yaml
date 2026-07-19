@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: shogo-keirin-os
+    runtime: docker
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: SHOGO_ACCESS_PIN
+        sync: false

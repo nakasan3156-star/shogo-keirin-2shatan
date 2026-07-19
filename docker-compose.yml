@@ -1,0 +1,8 @@
+services:
+  shogo-keirin-api:
+    build: .
+    ports:
+      - "8001:8000"
+    environment:
+      SHOGO_ACCESS_PIN: ""
+    restart: unless-stopped

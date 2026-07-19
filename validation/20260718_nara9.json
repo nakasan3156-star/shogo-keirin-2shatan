@@ -1,0 +1,44 @@
+{
+  "record_version": "1.0",
+  "race_id": "20260718_奈良_9R",
+  "model_version": "0.1.0-research",
+  "prediction_settings": {
+    "monte_carlo_runs": 100000,
+    "seed": 14072026,
+    "ex_data_used": true,
+    "odds_used_for_probability_estimation": false
+  },
+  "actual_result": {
+    "first": 4,
+    "second": 3,
+    "payout_yen_per_100": 660,
+    "final_payout_odds": 6.6
+  },
+  "actual_pair_prediction": {
+    "estimated_probability": 0.04237,
+    "fair_odds": 23.602,
+    "snapshot_odds": 8.7,
+    "ev_at_snapshot": 0.3686,
+    "ev_rank": 39,
+    "research_candidate": false
+  },
+  "snapshot_to_final_odds": {
+    "snapshot": 8.7,
+    "final": 6.6,
+    "change_rate": -0.241379
+  },
+  "flat_100_yen_backtest": [
+    {"ev_threshold": 1.0, "bets": 16, "stake": 1600, "return": 0, "roi": 0.0},
+    {"ev_threshold": 1.05, "bets": 16, "stake": 1600, "return": 0, "roi": 0.0},
+    {"ev_threshold": 1.1, "bets": 15, "stake": 1500, "return": 0, "roi": 0.0},
+    {"ev_threshold": 1.15, "bets": 14, "stake": 1400, "return": 0, "roi": 0.0},
+    {"ev_threshold": 1.2, "bets": 14, "stake": 1400, "return": 0, "roi": 0.0}
+  ],
+  "verdict": "miss",
+  "diagnosis": [
+    "的中した4→3を低確率・低EVと評価した",
+    "同一ライン内の番手差しと先行残りの相関表現が弱い可能性がある",
+    "高競走得点の追込選手を過大評価している可能性がある",
+    "1レースだけでは係数変更を行わない"
+  ]
+}
