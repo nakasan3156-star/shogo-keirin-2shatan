@@ -499,6 +499,120 @@ def parse_ex_data(path: Path, rider_numbers: list[int]) -> tuple[dict[int, dict[
     raise ValueError("現在のEXデータはPNG/JPG/WebP画像に対応しています。")
 
 
+EX_FIELD_ALIASES = {
+    "kamashi": {"かまし", "かまし成功率", "kamashi"},
+    "tsuppari": {"つっぱり", "つっぱり成功率", "tsuppari"},
+    "chigiri": {"ちぎり", "ちぎり率", "chigiri"},
+    "chigirareru": {"ちぎられ", "ちぎられ率", "chigirareru"},
+}
+
+
+def _ex_cell(value: str) -> dict[str, float | int | None] | None:
+    normalized = unicodedata.normalize("NFKC", value).strip()
+    if normalized in {"", "-", "--", "—", "未取得", "なし", "null", "None"}:
+        return None
+    rate_match = re.search(r"(\d{1,3}(?:\.\d+)?)\s*%", normalized)
+    sample_match = re.search(r"\(?\s*(\d+)\s*/\s*(\d+)\s*\)?", normalized)
+    if not rate_match and not sample_match:
+        return None
+    success = int(sample_match.group(1)) if sample_match else None
+    total = int(sample_match.group(2)) if sample_match else None
+    if total == 0:
+        rate = None
+    elif rate_match:
+        rate = float(rate_match.group(1)) / 100.0
+    elif success is not None and total:
+        rate = success / total
+    else:
+        rate = None
+    return {"rate": rate, "success": success, "total": total}
+
+
+def _ex_columns(line: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", line).strip()
+    if not normalized:
+        return []
+    if re.search(r"[,\t、]", normalized):
+        return [part.strip() for part in re.split(r"\s*[,\t、]\s*", normalized)]
+    return re.split(r"\s+", normalized)
+
+
+def parse_ex_text(text: str, rider_numbers: list[int]) -> tuple[dict[int, dict[str, Any]], list[str]]:
+    """Parse optional pasted EX data without making prediction completion depend on it.
+
+    Header order, extra columns and missing values may vary. Invalid rows are
+    ignored with warnings; they never make the required two-PDF pipeline fail.
+    """
+    warnings: list[str] = []
+    lines = [line for line in text.splitlines() if line.strip()]
+    if not lines:
+        return {}, warnings
+
+    header_index = next(
+        (index for index, line in enumerate(lines) if "車番" in unicodedata.normalize("NFKC", line)),
+        None,
+    )
+    header = _ex_columns(lines[header_index]) if header_index is not None else []
+    normalized_header = [re.sub(r"\s+", "", value).lower() for value in header]
+
+    number_index: int | None = None
+    field_indices: dict[str, int] = {}
+    if header:
+        for index, value in enumerate(normalized_header):
+            if value in {"車番", "車", "番号", "選手番号"}:
+                number_index = index
+            for field, aliases in EX_FIELD_ALIASES.items():
+                if value in aliases:
+                    field_indices[field] = index
+
+    data_lines = lines[(header_index + 1) if header_index is not None else 0:]
+    output: dict[int, dict[str, Any]] = {}
+    valid_numbers = set(rider_numbers)
+    fields = ["kamashi", "tsuppari", "chigiri", "chigirareru"]
+    for row_number, line in enumerate(data_lines, start=1):
+        columns = _ex_columns(line)
+        if not columns:
+            continue
+        if number_index is None:
+            # Supported headerless layouts:
+            # frame,number,name,4 metrics / number,name,4 metrics / number,4 metrics
+            if len(columns) >= 7 and columns[0].isdigit() and columns[1].isdigit():
+                row_number_index, inferred = 1, {field: 3 + i for i, field in enumerate(fields)}
+            elif len(columns) >= 6 and columns[0].isdigit():
+                row_number_index, inferred = 0, {field: 2 + i for i, field in enumerate(fields)}
+            elif len(columns) >= 5 and columns[0].isdigit():
+                row_number_index, inferred = 0, {field: 1 + i for i, field in enumerate(fields)}
+            else:
+                warnings.append(f"EX {row_number}行目: 車番と項目を特定できず無視しました。")
+                continue
+            indices = inferred
+        else:
+            row_number_index, indices = number_index, field_indices
+        if row_number_index >= len(columns) or not columns[row_number_index].isdigit():
+            warnings.append(f"EX {row_number}行目: 車番を読めず無視しました。")
+            continue
+        number = int(columns[row_number_index])
+        if number not in valid_numbers:
+            warnings.append(f"EX {row_number}行目: 出走表にない車番{number}を無視しました。")
+            continue
+        item: dict[str, Any] = {}
+        for field, index in indices.items():
+            if index < len(columns):
+                parsed = _ex_cell(columns[index])
+                if parsed is not None:
+                    item[field] = parsed
+        if item:
+            output[number] = item
+
+    if not output:
+        warnings.append("EX文字データから有効な数値を取得できなかったため、EXなしで計算しました。")
+    else:
+        missing = sorted(valid_numbers - set(output))
+        if missing:
+            warnings.append(f"EX未取得の車番: {', '.join(map(str, missing))}。取得分だけ使用しました。")
+    return output, warnings
+
+
 def parse_result_pdf(path: Path) -> dict[str, Any]:
     text = pdftotext(path)
     first_match = re.search(r"1着\s+[1-6]\s+([1-9])", text)
