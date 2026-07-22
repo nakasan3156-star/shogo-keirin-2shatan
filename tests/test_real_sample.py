@@ -9,6 +9,7 @@ from app.parser import (
     Rider,
     classify_pdf,
     parse_entry_pdf,
+    parse_ex_text,
     parse_odds_pdf,
     parse_recent_pdf,
 )
@@ -90,6 +91,34 @@ def test_real_monte_carlo_is_complete_and_reproducible():
         assert len(first["all_combinations"]) == expected
         assert first["calculation"]["probability_sum_all_ordered_pairs"] == 1.0
         assert first["calculation"]["odds_used_for_probability_estimation"] is False
+
+
+def test_optional_ex_text_accepts_real_winticket_layout_and_zero_sample_is_missing():
+    text = """枠,車番,選手名,かまし成功率,つっぱり成功率,ちぎり率,ちぎられ率
+1,1,島村匠,-,-,-,4%(1/21)
+2,2,佐山寛,0%(0/0),100%(1/1),13%(2/15),12%(1/8)
+3,3,安部貴,-,-,-,0%(0/6)
+4,4,元砂勇,-,-,-,0%(0/12)
+5,5,佐野梅,100%(1/1),0%(0/0),0%(0/0),33%(2/6)
+6,6,菅原晃,-,-,-,8%(2/25)
+"""
+    data, warnings = parse_ex_text(text, [1, 2, 3, 4, 5, 6])
+    assert warnings == []
+    assert data[1]["chigirareru"] == {"rate": 0.04, "success": 1, "total": 21}
+    assert data[2]["kamashi"]["rate"] is None
+    assert data[2]["tsuppari"] == {"rate": 1.0, "success": 1, "total": 1}
+    assert data[5]["chigiri"]["rate"] is None
+
+
+def test_optional_ex_text_never_blocks_for_partial_or_malformed_rows():
+    text = """車番 選手名 ちぎられ率 かまし成功率 つっぱり成功率 ちぎり率
+1 島村匠 4%(1/21) - - -
+壊れた行
+99 対象外 50%(1/2) - - -
+"""
+    data, warnings = parse_ex_text(text, [1, 2, 3, 4, 5, 6])
+    assert data[1]["chigirareru"]["rate"] == 0.04
+    assert warnings
 
 
 def test_same_race_three_pdf_pipeline_is_complete_and_reproducible():
