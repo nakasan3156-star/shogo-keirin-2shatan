@@ -19,7 +19,6 @@ from .parser import (
     DOCUMENT_BASIC,
     DOCUMENT_ODDS,
     DOCUMENT_RECENT,
-    DOCUMENT_UNKNOWN,
     classify_pdf,
     document_identity,
     parse_entry_pdf,
@@ -57,7 +56,7 @@ def health() -> dict[str, Any]:
         "bet_type": "2車単",
         "field_sizes": [7, 9],
         "required_documents": ["基本情報PDF", "直近成績PDF", "2車単オッズPDF"],
-        "pdf_classification": "content_based",
+        "pdf_classification": "labelled_fields_with_dedicated_validation",
         "monte_carlo_default": 100_000,
         "seed_default": 3156,
         "pdftotext_available": shutil.which("pdftotext") is not None,
@@ -79,7 +78,11 @@ async def analyze(
     seed: int = Form(default=3156),
 ) -> dict[str, Any]:
     _check_pin(pin)
+    # The form already assigns an explicit role to each upload. Older versions
+    # ignored those roles and guessed from a few headings, so valid netkeirin
+    # print layouts could be rejected as "unknown".
     uploads = [basic_pdf, recent_pdf, odds_pdf]
+    expected_types = [DOCUMENT_BASIC, DOCUMENT_RECENT, DOCUMENT_ODDS]
     try:
         with tempfile.TemporaryDirectory(prefix="shogo-keirin-pdf-") as tmp:
             root = Path(tmp)
@@ -93,22 +96,20 @@ async def analyze(
                 path.write_bytes(payload)
                 paths.append(path)
 
-            classified: dict[str, Path] = {}
+            classified = dict(zip(expected_types, paths, strict=True))
             audit: list[dict[str, str]] = []
-            for upload, path in zip(uploads, paths, strict=True):
-                kind = classify_pdf(path)
-                audit.append({"filename": upload.filename or path.name, "detected_type": kind})
-                if kind == DOCUMENT_UNKNOWN:
-                    raise ValueError(f"{upload.filename}: PDFの種類を判定できません。")
-                if kind in classified:
-                    raise ValueError(f"{kind} PDFが重複しています。基本・直近・オッズを1つずつ指定してください。")
-                classified[kind] = path
+            for expected, upload, path in zip(expected_types, uploads, paths, strict=True):
+                audit.append({
+                    "filename": upload.filename or path.name,
+                    "input_field": expected,
+                    "content_hint": classify_pdf(path),
+                    "validation": "dedicated_parser",
+                })
 
-            missing = [kind for kind in (DOCUMENT_BASIC, DOCUMENT_RECENT, DOCUMENT_ODDS) if kind not in classified]
-            if missing:
-                raise ValueError(f"必要なPDFが不足しています: {', '.join(missing)}")
-
-            race = parse_entry_pdf(classified[DOCUMENT_BASIC])
+            try:
+                race = parse_entry_pdf(classified[DOCUMENT_BASIC])
+            except ValueError as exc:
+                raise ValueError(f"基本情報PDFを読めません: {exc}") from exc
             identities = {kind: document_identity(path) for kind, path in classified.items()}
             for kind, identity in identities.items():
                 if identity["venue"] != race.venue or identity["race_number"] != race.race_number:
@@ -117,9 +118,15 @@ async def analyze(
                         f"基本={race.venue}{race.race_number}R"
                     )
 
-            recent = parse_recent_pdf(classified[DOCUMENT_RECENT], race)
+            try:
+                recent = parse_recent_pdf(classified[DOCUMENT_RECENT], race)
+            except ValueError as exc:
+                raise ValueError(f"直近成績PDFを読めません: {exc}") from exc
             numbers = [rider.number for rider in race.riders]
-            odds = parse_odds_pdf(classified[DOCUMENT_ODDS], numbers)
+            try:
+                odds = parse_odds_pdf(classified[DOCUMENT_ODDS], numbers)
+            except ValueError as exc:
+                raise ValueError(f"2車単オッズPDFを読めません: {exc}") from exc
             output = predict(race, odds, runs=monte_carlo_runs, seed=seed, history=recent)
             output["document_audit"] = audit
             output["input_policy"] = {
@@ -170,7 +177,7 @@ button{width:100%;border:0;border-radius:13px;padding:17px;background:#087546;co
 table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:10px 6px;border-bottom:1px solid #e4e8ec;text-align:right}th:first-child,td:first-child{text-align:left}
 pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#d1fae5;padding:14px;border-radius:12px;max-height:420px;overflow:auto}
 </style></head><body><main class="wrap"><h1>章悟式∞競輪OS</h1>
-<section class="card"><p>netkeirinの3種類を中身で自動判別します。7車・9車、2車単全組合せ対応。</p>
+<section class="card"><p>netkeirinの基本情報・直近成績・2車単オッズを、指定した欄ごとに専用解析します。7車・9車、2車単全組合せ対応。</p>
 <form id="form">
 <label>基本情報PDF</label><input type="file" name="basic_pdf" accept="application/pdf" required>
 <label>直近成績PDF</label><input type="file" name="recent_pdf" accept="application/pdf" required>
