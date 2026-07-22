@@ -13,6 +13,7 @@ from app.parser import (
     parse_odds_pdf,
     parse_recent_pdf,
 )
+import app.parser as parser_module
 
 
 WORKSPACE = Path(__file__).resolve().parents[3]
@@ -119,6 +120,25 @@ def test_optional_ex_text_never_blocks_for_partial_or_malformed_rows():
     data, warnings = parse_ex_text(text, [1, 2, 3, 4, 5, 6])
     assert data[1]["chigirareru"]["rate"] == 0.04
     assert warnings
+
+
+def test_missing_rider_name_does_not_abort_valid_statistics(monkeypatch, tmp_path):
+    rows = []
+    names = {2: "大阪二郎", 3: "大阪三郎", 4: "大阪四郎", 5: "大阪五郎"}
+    for number in range(1, 6):
+        rows.append(
+            f"{number}{number} 100.{number:02d} 追 1 0 0 0 1 0 2 2 2 10 "
+            "12.5% 25.0% 37.5% 3.92 単騎\n"
+        )
+        if number != 1:
+            rows.append(f"{names[number]}\n大阪 {30 + number}歳\n100期 Ａ1\n")
+    text = "広島 開催\n3R\nＡ級 一般\n発走 10:00 締切 9:55 2000m 4周\n" + "\n".join(rows)
+    monkeypatch.setattr(parser_module, "pdftotext", lambda _path: text)
+    race = parse_entry_pdf(tmp_path / "20260722_広島3R.pdf")
+    assert len(race.riders) == 5
+    assert race.riders[0].name == "1番車（氏名未取得）"
+    assert race.riders[1].name == "大阪二郎"
+    assert any("成績数値のみで計算" in warning for warning in race.line_warnings)
 
 
 def test_same_race_three_pdf_pipeline_is_complete_and_reproducible():
