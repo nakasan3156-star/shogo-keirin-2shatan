@@ -1,13 +1,13 @@
 {
   "name": "章悟式∞競輪OS 2車単PDF API",
-  "version": "1.0.0-pdf-research",
+  "version": "1.1.0-two-pdf-optional-ex",
   "status": "unvalidated",
   "bet_type": "2車単",
-  "supported_field_sizes": [7, 9],
+  "supported_field_sizes": [5, 6, 7, 8, 9],
   "inputs": [
     "netkeirin基本情報PDF",
-    "netkeirin直近成績PDF",
-    "netkeirin 2車単人気順オッズPDF"
+    "netkeirin 2車単人気順オッズPDF",
+    "任意EX文字データ"
   ],
   "forbidden_prediction_inputs": [
     "Web自動取得",
@@ -15,17 +15,17 @@
     "結果・払戻",
     "推測による欠損補完"
   ],
-  "document_detection": "PDF本文による自動判別",
+  "document_detection": "入力欄ごとの専用解析器による検証",
   "probability_model": {
     "method": "two_stage_line_then_order_monte_carlo",
     "odds_used_for_probability": false,
     "standard_runs": 100000,
     "standard_seed": 3156
   },
-  "lost_strong": {
-    "kind": "proxy",
-    "inputs": ["直近着順", "脚質", "S", "B"],
-    "video_interference_included": false
+  "optional_ex": {
+    "fields": ["かまし成功率", "つっぱり成功率", "ちぎり率", "ちぎられ率"],
+    "missing_policy": "未取得。0点または0%に変換しない",
+    "failure_policy": "警告を返し、EXなしで計算を継続"
   },
   "ev_formula": "estimated_pair_probability * 2shatan_odds",
   "live_betting_approved": false
