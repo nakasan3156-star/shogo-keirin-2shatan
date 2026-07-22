@@ -151,7 +151,44 @@ def parse_entry_pdf(path: Path) -> RaceInput:
     if len(matches) < 5 or len(matches) > 9:
         raise ValueError(f"出走選手を正しく取得できませんでした（取得={len(matches)}人）。")
 
+    # netkeirin changes the text order of the profile area depending on the
+    # print layout, page break and browser.  Do not assume that the profile is
+    # always between one statistics row and the next one.  Collect every
+    # profile first and use the nearest unused profile as a fallback.
+    prefectures = "|".join(sorted(PREFECTURE_REGION, key=len, reverse=True))
+    profile_patterns = (
+        re.compile(
+            rf"(?m)^\s*([^\s\d%.]{{2,16}})\s*$\n\s*({prefectures})\s+(\d{{2}})歳\s*$"
+            rf"(?:\n\s*(\d{{1,3}})期\s+([^\s]+)\s*$)?"
+        ),
+        re.compile(
+            rf"(?m)^\s*([^\s\d%.]{{2,16}})\s+({prefectures})\s+(\d{{2}})歳"
+            rf"(?:\s+(\d{{1,3}})期\s+([^\s]+))?\s*$"
+        ),
+    )
+    profiles: list[dict[str, Any]] = []
+    seen_profiles: set[tuple[int, str]] = set()
+    for pattern in profile_patterns:
+        for profile in pattern.finditer(text):
+            key = (profile.start(), profile.group(1))
+            if key in seen_profiles:
+                continue
+            seen_profiles.add(key)
+            profiles.append(
+                {
+                    "start": profile.start(),
+                    "name": profile.group(1),
+                    "prefecture": profile.group(2),
+                    "age": int(profile.group(3)),
+                    "term": int(profile.group(4)) if profile.group(4) else None,
+                    "grade": profile.group(5) if profile.group(5) else None,
+                }
+            )
+    profiles.sort(key=lambda item: int(item["start"]))
+
     riders: list[Rider] = []
+    profile_warnings: list[str] = []
+    used_profile_positions: set[int] = set()
     for index, match in enumerate(matches):
         block_end = matches[index + 1].start() if index + 1 < len(matches) else match.end() + 800
         block = text[match.end():block_end]
@@ -159,20 +196,60 @@ def parse_entry_pdf(path: Path) -> RaceInput:
             r"(?m)^\s*([^\s\d%.]{2,10})\s*$\n\s*([^\s\d]+)\s+(\d+)歳\s*$",
             block,
         )
-        if not name_match:
-            raise ValueError(f"{match.group(2)}番車の選手名を取得できません。")
-        term_match = re.search(r"(?m)^\s*(\d+)期\s+([^\s]+)\s*$", block)
+        profile: dict[str, Any] | None = None
+        if name_match:
+            term_match = re.search(r"(?m)^\s*(\d+)期\s+([^\s]+)\s*$", block)
+            profile = {
+                "start": match.end() + name_match.start(),
+                "name": name_match.group(1),
+                "prefecture": name_match.group(2),
+                "age": int(name_match.group(3)),
+                "term": int(term_match.group(1)) if term_match else None,
+                "grade": term_match.group(2) if term_match else None,
+            }
+        else:
+            # A page break can place the name before the statistics row, or
+            # after a repeated table header.  The nearest unused profile is a
+            # safer association than aborting the whole race.
+            candidates = [
+                item
+                for item in profiles
+                if int(item["start"]) not in used_profile_positions
+                and match.start() - 1200 <= int(item["start"]) <= block_end
+            ]
+            if candidates:
+                profile = min(candidates, key=lambda item: abs(int(item["start"]) - match.end()))
+
+        number = int(match.group(2))
+        if profile:
+            used_profile_positions.add(int(profile["start"]))
+        else:
+            # Name/prefecture/age do not enter the current numerical ability
+            # model.  Preserve the valid statistics row and continue with an
+            # explicit missing-data marker instead of turning a harmless PDF
+            # layout variation into a fatal error.
+            profile = {
+                "start": -number,
+                "name": f"{number}番車（氏名未取得）",
+                "prefecture": "未取得",
+                "age": 0,
+                "term": None,
+                "grade": None,
+            }
+            profile_warnings.append(
+                f"{number}番車: 選手プロフィールを取得できず、成績数値のみで計算しました。"
+            )
         values = match.groups()
         counts = [int(value) for value in values[4:14]]
         riders.append(
             Rider(
                 frame=int(values[0]),
                 number=int(values[1]),
-                name=name_match.group(1),
-                prefecture=name_match.group(2),
-                age=int(name_match.group(3)),
-                term=int(term_match.group(1)) if term_match else None,
-                grade=term_match.group(2) if term_match else None,
+                name=str(profile["name"]),
+                prefecture=str(profile["prefecture"]),
+                age=int(profile["age"]),
+                term=profile["term"],
+                grade=profile["grade"],
                 race_score=float(values[2]),
                 style=values[3],
                 start_count=counts[0],
@@ -197,6 +274,7 @@ def parse_entry_pdf(path: Path) -> RaceInput:
     if len(numbers) != len(set(numbers)):
         raise ValueError("車番が重複しています。PDFの読み取りに失敗しました。")
     lines, warnings = infer_lines(riders)
+    warnings = profile_warnings + warnings
     race_id, venue, race_number, race_class, distance = _metadata(text, path.name)
     return RaceInput(
         race_id=race_id,
