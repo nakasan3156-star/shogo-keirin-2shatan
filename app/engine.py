@@ -8,7 +8,7 @@ import numpy as np
 from .parser import RaceInput, Rider
 
 
-MODEL_VERSION = "1.0.0-pdf-research"
+MODEL_VERSION = "1.1.0-two-pdf-optional-ex"
 SCENARIO_NAMES = ("leader_hold", "bante_sashi", "makuri_line", "line_break_cross", "solo_or_detached")
 
 
@@ -152,7 +152,14 @@ def _line_parameters(
             _posterior_rate(ex_data.get(riders[int(index)].number, {}).get("chigirareru"), default=0.15)
             for index in indices[1:]
         ]
-        same = 0.43 + 0.07 * (len(indices) - 2) + 0.06 * math.tanh(support) - 0.18 * float(np.mean(detached_values))
+        leader_chigiri = _posterior_rate(ex_data.get(leader.number, {}).get("chigiri"), default=0.10)
+        same = (
+            0.43
+            + 0.07 * (len(indices) - 2)
+            + 0.06 * math.tanh(support)
+            - 0.12 * leader_chigiri
+            - 0.18 * float(np.mean(detached_values))
+        )
         same_line_probabilities.append(float(np.clip(same, 0.18, 0.75)))
 
     return lines, _softmax(np.asarray(line_strengths, dtype=float) / 0.68), np.asarray(same_line_probabilities), first_probabilities
@@ -299,11 +306,8 @@ def predict(
         )
 
     all_warnings = list(race.line_warnings) + list(ex_warnings)
-    if not history:
-        all_warnings.append("直近成績未使用。負けて強し代理点は計算していません。")
-    elif history.get("status") != "complete":
-        all_warnings.append(f"直近成績の取得状態は{history.get('status')}です。")
-    all_warnings.append("負けて強しは添付PDFの直近着順と基本情報のS/B・脚質による代理点であり、映像上の接触や不利は含みません。")
+    if history and history.get("status") != "complete":
+        all_warnings.append(f"互換用の直近成績取得状態は{history.get('status')}です。")
     all_warnings.append("研究版です。時系列アウト・オブ・サンプル検証前は実投資判定に使用しません。")
 
     scenario_distribution = {
