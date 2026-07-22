@@ -18,12 +18,11 @@ from .engine import MODEL_VERSION, predict
 from .parser import (
     DOCUMENT_BASIC,
     DOCUMENT_ODDS,
-    DOCUMENT_RECENT,
     classify_pdf,
     document_identity,
     parse_entry_pdf,
+    parse_ex_text,
     parse_odds_pdf,
-    parse_recent_pdf,
     parse_result_pdf,
 )
 
@@ -31,7 +30,7 @@ from .parser import (
 app = FastAPI(
     title="章悟式∞競輪OS 2車単PDF API",
     version=MODEL_VERSION,
-    description="基本情報・直近成績・2車単オッズの各PDFから、展開・負けて強し代理点・モンテカルロ・EVを返す研究API。",
+    description="基本情報PDF・2車単オッズPDFと任意のEX文字データから、展開・モンテカルロ・EVを返す研究API。",
 )
 
 
@@ -54,8 +53,9 @@ def health() -> dict[str, Any]:
         "model_version": MODEL_VERSION,
         "model_status": "research_unvalidated",
         "bet_type": "2車単",
-        "field_sizes": [7, 9],
-        "required_documents": ["基本情報PDF", "直近成績PDF", "2車単オッズPDF"],
+        "field_sizes": [5, 6, 7, 8, 9],
+        "required_documents": ["基本情報PDF", "2車単オッズPDF"],
+        "optional_inputs": ["EX文字データ"],
         "pdf_classification": "labelled_fields_with_dedicated_validation",
         "monte_carlo_default": 100_000,
         "seed_default": 3156,
@@ -71,8 +71,8 @@ def home() -> str:
 @app.post("/analyze")
 async def analyze(
     basic_pdf: UploadFile = File(...),
-    recent_pdf: UploadFile = File(...),
     odds_pdf: UploadFile = File(...),
+    ex_text: str = Form(default=""),
     pin: str = Form(default=""),
     monte_carlo_runs: int = Form(default=100_000),
     seed: int = Form(default=3156),
@@ -81,8 +81,8 @@ async def analyze(
     # The form already assigns an explicit role to each upload. Older versions
     # ignored those roles and guessed from a few headings, so valid netkeirin
     # print layouts could be rejected as "unknown".
-    uploads = [basic_pdf, recent_pdf, odds_pdf]
-    expected_types = [DOCUMENT_BASIC, DOCUMENT_RECENT, DOCUMENT_ODDS]
+    uploads = [basic_pdf, odds_pdf]
+    expected_types = [DOCUMENT_BASIC, DOCUMENT_ODDS]
     try:
         with tempfile.TemporaryDirectory(prefix="shogo-keirin-pdf-") as tmp:
             root = Path(tmp)
@@ -118,20 +118,26 @@ async def analyze(
                         f"基本={race.venue}{race.race_number}R"
                     )
 
-            try:
-                recent = parse_recent_pdf(classified[DOCUMENT_RECENT], race)
-            except ValueError as exc:
-                raise ValueError(f"直近成績PDFを読めません: {exc}") from exc
             numbers = [rider.number for rider in race.riders]
             try:
                 odds = parse_odds_pdf(classified[DOCUMENT_ODDS], numbers)
             except ValueError as exc:
                 raise ValueError(f"2車単オッズPDFを読めません: {exc}") from exc
-            output = predict(race, odds, runs=monte_carlo_runs, seed=seed, history=recent)
+            ex_data, ex_warnings = parse_ex_text(ex_text, numbers)
+            output = predict(
+                race,
+                odds,
+                ex_data=ex_data,
+                ex_warnings=ex_warnings,
+                runs=monte_carlo_runs,
+                seed=seed,
+                history=None,
+            )
             output["document_audit"] = audit
             output["input_policy"] = {
                 "external_web_fetch": False,
                 "screenshots": False,
+                "optional_ex_text_used": bool(ex_data),
                 "unreadable_values": "未取得",
                 "results_or_payouts_used_for_prediction": False,
             }
@@ -171,17 +177,17 @@ INDEX_HTML = """<!doctype html>
 <style>
 body{margin:0;background:#f3f5f7;color:#17212b;font-family:system-ui,-apple-system,sans-serif}.wrap{max-width:760px;margin:auto;padding:22px}
 .card{background:white;border-radius:22px;padding:22px;margin:18px 0;box-shadow:0 8px 30px #17212b14}h1{font-size:30px;margin:18px 0}h2{font-size:21px}
-label{display:block;font-weight:750;margin:17px 0 7px}input{width:100%;box-sizing:border-box;padding:13px;border:1px solid #aeb8c2;border-radius:10px;background:white}
+label{display:block;font-weight:750;margin:17px 0 7px}input,textarea{width:100%;box-sizing:border-box;padding:13px;border:1px solid #aeb8c2;border-radius:10px;background:white;font:inherit}textarea{min-height:180px;resize:vertical}
 button{width:100%;border:0;border-radius:13px;padding:17px;background:#087546;color:white;font-size:18px;font-weight:800;margin-top:20px}.muted{color:#62707d;font-size:14px}
 .error{color:#a51616;white-space:pre-wrap}.pill{display:inline-block;padding:5px 9px;border-radius:999px;background:#e7f6ee;color:#075f3b;font-weight:700;margin:3px}
 table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:10px 6px;border-bottom:1px solid #e4e8ec;text-align:right}th:first-child,td:first-child{text-align:left}
 pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#d1fae5;padding:14px;border-radius:12px;max-height:420px;overflow:auto}
 </style></head><body><main class="wrap"><h1>章悟式∞競輪OS</h1>
-<section class="card"><p>netkeirinの基本情報・直近成績・2車単オッズを、指定した欄ごとに専用解析します。7車・9車、2車単全組合せ対応。</p>
+<section class="card"><p>netkeirinの基本情報PDFと2車単オッズPDFの2点で計算します。EX文字データは任意で、未入力・一部欠損でも停止しません。5〜9車対応。</p>
 <form id="form">
 <label>基本情報PDF</label><input type="file" name="basic_pdf" accept="application/pdf" required>
-<label>直近成績PDF</label><input type="file" name="recent_pdf" accept="application/pdf" required>
 <label>2車単オッズPDF</label><input type="file" name="odds_pdf" accept="application/pdf" required>
+<label>EX文字データ（任意）</label><textarea name="ex_text" placeholder="枠,車番,選手名,かまし成功率,つっぱり成功率,ちぎり率,ちぎられ率&#10;1,1,島村匠,-,-,-,4%(1/21)"></textarea>
 <label>専用PIN</label><input type="password" name="pin" autocomplete="current-password">
 <input type="hidden" name="monte_carlo_runs" value="100000"><input type="hidden" name="seed" value="3156">
 <button type="submit">10万回で計算する</button></form><p id="status" class="muted"></p><p id="error" class="error"></p></section>
