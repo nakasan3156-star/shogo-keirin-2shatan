@@ -12,6 +12,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY individual_api ./individual_api
 COPY MODEL_SPEC.json ./MODEL_SPEC.json
 
 EXPOSE 8000
