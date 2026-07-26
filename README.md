@@ -1,52 +1,60 @@
-# 章悟式∞競輪OS Ver.1.1 PDF API版
+# 章悟式∞競輪OS 個人評価型PDF API
 
-netkeirinから保存した同一レースの2種類のPDFを使う、5〜9車対応の2車単研究APIです。
+選手一人ずつの能力を先に評価し、役割適性、ライン補正、展開シナリオ、10万回シミュレーションの順で2車単確率とEVを算出するAPIです。
 
-## 入力
+## 固定入力
 
-1. 「基本情報」タブの出走表PDF
-2. 2車単の人気順オッズPDF
+1. netkeirin出走表PDF
+2. KEIRIN.JP「着度数・H・S回数」PDF
+3. netkeirin 2車単オッズPDF
 
-EXデータを文字に変換できる場合は任意で追加できます。EXが空、部分的、列順違い、欠損行ありでも計算は継続します。`-` と `(0/0)` は0%ではなく未取得として扱います。
+EXデータ画像は任意です。Web検索やレース結果は予測に使用しません。
 
-各PDFは指定された入力欄専用の解析器で検査します。別レースのPDF混入、2車単の組合せ不足、車番不一致は計算前に停止します。Web取得、スクリーンショット、結果・払戻は予測入力に使いません。
+3PDFの開催場、日付、レース番号を照合し、選手、H/B、並び、全2車単オッズが揃ってから計算します。空ファイル、破損PDF、別レース混在、欠損があれば `INPUT_ERROR / NO_BET` で安全停止します。
 
-## 計算
+## 固定購入条件
 
-- 競走得点、勝率・連対率、脚質、S/B、決まり手、ライン
-- 任意EXのかまし、つっぱり、ちぎり、ちぎられ（取得できた選手だけ）
-- ライン勝敗→同ライン／別線→1、2着順の二段階モンテカルロ
-- 標準100,000回、seed 3156
-- `EV = 2車単推定確率 × 現在オッズ`
-
-直近成績PDFを使わないため、映像上の不利や「負けて強し」を見たことにはしません。
+- FⅠ・GⅢのみ
+- GⅠは `NO_BET`
+- 8.0～30.0倍
+- Wilson 90%下限による保守EV 1.10以上
+- 推定確率1%以上
+- 主導権確信度38%以上
+- 展開確信度35%以上
+- 最大2点
 
 ## 起動
 
 ```bash
-docker compose up --build
+docker compose -f docker-compose.individual.yml up --build
 ```
 
-ブラウザで `http://localhost:8001/`、API仕様は `http://localhost:8001/docs` を開きます。
+- 稼働確認: `GET http://localhost:8787/health`
+- PDF予測: `POST http://localhost:8787/predict-files`
 
-## API
+```bash
+curl -X POST http://localhost:8787/predict-files \
+  -F "racecard_pdf=@racecard.pdf" \
+  -F "hs_pdf=@hs.pdf" \
+  -F "odds_pdf=@odds.pdf"
+```
 
-`POST /analyze` のmultipart項目:
+## 出力
 
-- `basic_pdf`
-- `odds_pdf`
-- `ex_text`（任意）
-- `pin`（環境変数 `SHOGO_ACCESS_PIN` を設定した場合）
-- `monte_carlo_runs`（標準100000）
-- `seed`（標準3156）
+- 主導権候補と確信度
+- 展開シナリオ確率
+- 各選手の1着率・2着率
+- 全2車単確率
+- EV・保守EV
+- 最大2点の購入候補
+- PDF照合監査
 
-主な監査項目:
+## 検証
 
-- `document_audit`
-- `calculation.probability_sum_all_ordered_pairs`
-- `calculation.odds_used_for_probability_estimation = false`
-- `input_policy.results_or_payouts_used_for_prediction = false`
+- 正規化エンジン17テスト合格
+- HTTP multipart実PDFテスト合格
+- 青森2026年7月23日10Rで、7選手、3ライン、全42通り、10万回処理を通し確認
+- 同じPDFから同じ結果を返すことを確認
+- 空PDF、破損PDF、別レース混在を `NO_BET` で停止することを確認
 
-## 現在の状態
-
-研究版です。5〜9車・同一レース2PDF・確率合計1.0・同一seed再現性を実ファイルで検査しますが、回収率の未使用期間検証が終わるまで実投資承認は常にfalseです。
+現行版: `1.1.2-individual-frozen`
