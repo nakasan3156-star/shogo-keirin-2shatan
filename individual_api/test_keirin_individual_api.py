@@ -41,6 +41,16 @@ def run_tests():
     assert first["simulations"] == N_SIMULATIONS
     assert math.isclose(sum(p["probability"] for p in first["pair_probabilities"]), 1.0)
     assert len(first["candidates"]) <= 2
+    assert isinstance(first["predicted_control"], int)
+    assert isinstance(first["predicted_main_line"], int)
+    assert isinstance(first["predicted_main_line_bikes"], list)
+    assert first["predicted_main_line_bikes"][0] == first["predicted_main_line"]
+    assert all(isinstance(bike, int) for bike in first["predicted_main_line_bikes"])
+    for candidate in first["candidates"]:
+        assert len(candidate["pair"]) == 2
+        assert all(isinstance(bike, int) for bike in candidate["pair"])
+        assert isinstance(candidate["odds"], float)
+        assert isinstance(candidate["conservative_ev"], float)
 
     changed_odds = sample_payload()
     changed_odds["odds"][0][1] = 29.9
