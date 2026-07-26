@@ -73,6 +73,14 @@ async def _save_upload(upload: UploadFile, destination: Path, label: str) -> Non
     destination.write_bytes(payload)
 
 
+def _upload_path(root: Path, upload: UploadFile, prefix: str) -> Path:
+    """開催情報を含む元ファイル名を安全な一時パス上で保持する。"""
+    original = Path(upload.filename or f"{prefix}.pdf").name.replace("\x00", "")
+    if not original:
+        original = f"{prefix}.pdf"
+    return root / f"{prefix}__{original}"
+
+
 @app.post("/analyze")
 async def analyze(
     racecard_pdf: UploadFile = File(...),
@@ -85,9 +93,9 @@ async def analyze(
     try:
         with tempfile.TemporaryDirectory(prefix="shogo-keirin-individual-") as tmp:
             root = Path(tmp)
-            racecard_path = root / "racecard.pdf"
-            hs_path = root / "hs.pdf"
-            odds_path = root / "odds.pdf"
+            racecard_path = _upload_path(root, racecard_pdf, "racecard")
+            hs_path = _upload_path(root, hs_pdf, "hs")
+            odds_path = _upload_path(root, odds_pdf, "odds")
             await _save_upload(racecard_pdf, racecard_path, "出走表PDF")
             await _save_upload(hs_pdf, hs_path, "H・S回数PDF")
             await _save_upload(odds_pdf, odds_path, "2車単オッズPDF")
