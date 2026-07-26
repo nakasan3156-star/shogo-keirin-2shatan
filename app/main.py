@@ -190,7 +190,9 @@ try{const q=await fetch('/analyze',{method:'POST',body:new FormData(f)}),d=await
 const a=d.pdf_audit||{},id=a.race||{};document.querySelector('#race').textContent=`${id.venue||''} ${id.race||''}R・${d.version}`;
 document.querySelector('#lines').innerHTML=(a.lines||[]).map(v=>`<span class="pill">${v.join('-')}</span>`).join('');
 document.querySelector('#control').textContent=`${d.predicted_control}番（${pct(d.control_confidence)}）`;
-const mainLine=(a.lines||[]).find(v=>v.includes(Number(d.predicted_main_line)))||[d.predicted_main_line];
+const mainLine=Array.isArray(d.predicted_main_line_bikes)
+?d.predicted_main_line_bikes
+:(a.lines||[]).find(v=>v.includes(Number(d.predicted_main_line)))||[d.predicted_main_line];
 document.querySelector('#mainline').textContent=mainLine.filter(v=>v!==null&&v!==undefined).join('-');
 document.querySelector('#scenario').textContent=d.predicted_scenario||'未取得';
 document.querySelector('#purchase').textContent=d.purchase_status==='CANDIDATES'?'購入候補あり':'見送り';
