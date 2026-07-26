@@ -8,7 +8,10 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from keirin_individual_api import VERSION, predict
+try:
+    from .keirin_individual_api import VERSION, predict
+except ImportError:  # 直接スクリプトとして実行する場合
+    from keirin_individual_api import VERSION, predict
 
 
 MAX_FILE_BYTES = 50_000_000
