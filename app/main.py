@@ -190,7 +190,8 @@ try{const q=await fetch('/analyze',{method:'POST',body:new FormData(f)}),d=await
 const a=d.pdf_audit||{},id=a.race||{};document.querySelector('#race').textContent=`${id.venue||''} ${id.race||''}R・${d.version}`;
 document.querySelector('#lines').innerHTML=(a.lines||[]).map(v=>`<span class="pill">${v.join('-')}</span>`).join('');
 document.querySelector('#control').textContent=`${d.predicted_control}番（${pct(d.control_confidence)}）`;
-document.querySelector('#mainline').textContent=(d.predicted_main_line||[]).join('-');
+const mainLine=(a.lines||[]).find(v=>v.includes(Number(d.predicted_main_line)))||[d.predicted_main_line];
+document.querySelector('#mainline').textContent=mainLine.filter(v=>v!==null&&v!==undefined).join('-');
 document.querySelector('#scenario').textContent=d.predicted_scenario||'未取得';
 document.querySelector('#purchase').textContent=d.purchase_status==='CANDIDATES'?'購入候補あり':'見送り';
 const p=d.candidates||[];document.querySelector('#ev').innerHTML=p.map(v=>`<tr><td>${v.pair.join('-')}</td><td>${pct(v.probability)}</td><td>${v.odds.toFixed(1)}</td><td><b>${v.conservative_ev.toFixed(2)}</b></td></tr>`).join('')||'<tr><td colspan="4">購入条件を満たす候補なし</td></tr>';
