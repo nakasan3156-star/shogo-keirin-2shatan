@@ -1,0 +1,8 @@
+services:
+  keirin-individual-api:
+    build:
+      context: ./individual_api
+      dockerfile: Dockerfile
+    ports:
+      - "8787:8787"
+    restart: unless-stopped
