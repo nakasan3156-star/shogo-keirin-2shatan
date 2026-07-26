@@ -221,6 +221,7 @@ def _predict_strict(payload: dict[str, Any]) -> dict[str, Any]:
     control_p = _softmax(np.asarray(control_scores)/0.90)
     predicted_control = roots[int(np.argmax(control_p))]
     predicted_main_line = roots[int(np.argmax(line_scores))]
+    predicted_main_line_bikes = list(lines[predicted_main_line])
 
     scenario_names = ["先行押し切り", "番手差し", "別線捲り", "ライン崩壊"]
     scenario_p = np.zeros((len(roots), 4))
@@ -327,7 +328,9 @@ def _predict_strict(payload: dict[str, Any]) -> dict[str, Any]:
         "purchase_status": "CANDIDATES" if grade_enabled and candidates else "NO_BET",
         "grade_enabled": grade_enabled, "input_complete": True,
         "predicted_control": predicted_control, "control_confidence": float(control_p.max()),
-        "predicted_main_line": predicted_main_line, "predicted_scenario": predicted_scenario,
+        "predicted_main_line": predicted_main_line,
+        "predicted_main_line_bikes": predicted_main_line_bikes,
+        "predicted_scenario": predicted_scenario,
         "scenario_probabilities": {scenario_names[i]: float(scenario_counts[i]) for i in range(4)},
         "individual_scores": individual, "pair_probabilities": pairs,
         "candidates": candidates if grade_enabled else [],
