@@ -32,9 +32,30 @@ PREFECTURE_TO_REGION = {
 }
 
 PREFECTURE_ALIASES = {
-    # netkeirinの狭い府県欄では「和歌山」が「和歌」と表示される。
+    # netkeirinの狭い府県欄では府県名が途中で省略されることがある。
     "和歌": "和歌山",
+    "神奈": "神奈川",
+    "鹿児": "鹿児島",
 }
+
+
+def _normalize_prefecture(value: str) -> str | None:
+    """Normalize full, suffixed and uniquely abbreviated prefecture labels."""
+    normalized = re.sub(r"[\s・･.．]+", "", value or "")
+    normalized = PREFECTURE_ALIASES.get(normalized, normalized)
+    if normalized in PREFECTURE_TO_REGION:
+        return normalized
+    if normalized.endswith(("都", "府", "県")):
+        without_suffix = normalized[:-1]
+        without_suffix = PREFECTURE_ALIASES.get(without_suffix, without_suffix)
+        if without_suffix in PREFECTURE_TO_REGION:
+            return without_suffix
+    candidates = [
+        prefecture
+        for prefecture in PREFECTURE_TO_REGION
+        if len(normalized) >= 2 and prefecture.startswith(normalized)
+    ]
+    return candidates[0] if len(candidates) == 1 else None
 
 
 class PdfInputError(ValueError):
@@ -229,14 +250,14 @@ def _parse_riders(
     riders: list[dict[str, Any]] = []
     for stat, name in zip(stats, names):
         bike = int(stat.group(1)[-1])
-        prefecture = name.group(2).replace(" ", "")
-        prefecture = PREFECTURE_ALIASES.get(prefecture, prefecture)
-        if prefecture not in PREFECTURE_TO_REGION:
-            raise PdfInputError("REGION_PARSE_FAILED", f"{bike}番の府県を地区へ変換できません")
+        raw_prefecture = name.group(2)
+        prefecture = _normalize_prefecture(raw_prefecture)
         riders.append({
             "bike": bike,
             "name": name.group(1).replace(" ", "").replace("追加", ""),
-            "region": PREFECTURE_TO_REGION[prefecture],
+            # 地区は同地区ライン補正だけに使う。未知表記で全計算を止めず、
+            # 未取得として補正対象外にする。
+            "region": PREFECTURE_TO_REGION[prefecture] if prefecture else "未取得",
             "score": float(stat.group(2)),
             "B": int(stat.group(5)),
             "escape": int(stat.group(6)),
