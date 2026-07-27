@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 
-VERSION = "1.1.3-pdf-region-compat"
+VERSION = "1.1.4-pdf-resilient"
 N_SIMULATIONS = 100_000
 REQUIRED_SOURCE_KEYS = {"racecard_pdf", "hs_pdf", "odds_pdf"}
 REQUIRED_RIDER_FIELDS = {
