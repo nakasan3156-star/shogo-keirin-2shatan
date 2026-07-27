@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import subprocess
 import logging
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -113,30 +114,28 @@ def _extract_text(path: Path, label: str) -> str:
     return completed.stdout
 
 
-def _identity(text: str, filename: str = "") -> dict[str, str | int | None]:
-    """PDF本文と元ファイル名から開催場・日付・レース番号を取得する。
 
-    netkeirinのPDF本文では日付が ``7/25(土)`` のように年なしで表示される。
-    一方、保存時の元ファイル名には ``2026年07月25日`` が含まれるため、
-    本文だけに限定せず両方を使って照合する。
-    """
-    combined = f"{text}\n{filename}"
+def _identity(text: str, filename: str = "") -> dict[str, str | int | None]:
+    """Read race identity across common full/half-width and date formats."""
+    normalized_text = unicodedata.normalize("NFKC", text).replace("\u00a0", " ")
+    normalized_filename = unicodedata.normalize("NFKC", filename)
+    combined = f"{normalized_text}\n{normalized_filename}"
     target = re.search(
-        r"(?m)^\s*(\d{1,2})R(?:\s*$|\s+[Ａ-ＺA-Z])",
-        text,
-    ) or re.search(r"(?:^|\s)(\d{1,2})R(?:\s|_|$)", filename)
+        r"(?m)^\s*(\d{1,2})\s*R(?:\s*$|\s+[A-Z])",
+        normalized_text,
+    ) or re.search(r"(?:^|\s)(\d{1,2})\s*R(?:\s|_|$)", normalized_filename)
     venue = re.search(
-        r"(?m)^\s*([^\s]+)\s+(?:初日|最終日|\d+日目|\d{4}/\d{1,2}/\d{1,2})",
-        text,
-    ) or re.search(r"(?:^|[/_ -])([^\s/_-]+?)競輪(?:場)?(?:\s|$)", filename)
+        r"(?m)^\s*([^\s]+)\s+(?:初日|最終日|\d+日目|\d{4}[/.-]\d{1,2}[/.-]\d{1,2})",
+        normalized_text,
+    ) or re.search(r"(?:^|[/_ -])([^\s/_-]+?)競輪(?:場)?(?:\s|$)", normalized_filename)
     date = re.search(
-        r"(\d{4})\s*[年/]\s*(\d{1,2})\s*(?:月|/)\s*(\d{1,2})\s*日?",
+        r"(20\d{2})\s*(?:年|[/.-])\s*(\d{1,2})\s*(?:月|[/.-])\s*(\d{1,2})\s*日?",
         combined,
     )
-    if date:
-        date_value = f"{int(date.group(1)):04d}-{int(date.group(2)):02d}-{int(date.group(3)):02d}"
-    else:
-        date_value = None
+    date_value = (
+        f"{int(date.group(1)):04d}-{int(date.group(2)):02d}-{int(date.group(3)):02d}"
+        if date else None
+    )
     return {
         "venue": venue.group(1).removesuffix("競輪場").removesuffix("競輪") if venue else None,
         "date": date_value,
@@ -145,27 +144,36 @@ def _identity(text: str, filename: str = "") -> dict[str, str | int | None]:
 
 
 def _grade(text: str) -> str:
-    match = re.search(r"(?m)^\s*(FI|FII|GIII|GI)\s+", text)
+    normalized = unicodedata.normalize("NFKC", text)
+    match = re.search(r"(?m)^\s*(GIII|GII|GI|FII|FI)(?:\s|$)", normalized)
     if not match:
-        raise PdfInputError("GRADE_NOT_FOUND", "出走表からグレードを取得できません")
-    return {"FI": "F1", "FII": "F2", "GIII": "G3", "GI": "G1"}[match.group(1)]
+        # Grade affects purchase eligibility, not the numerical prediction.
+        # Unknown grades therefore calculate safely and remain NO_BET.
+        return "UNKNOWN"
+    return {
+        "FI": "F1", "FII": "F2", "GI": "G1", "GII": "G2", "GIII": "G3",
+    }[match.group(1)]
 
 
 def _pre_race_status(text: str, race_number: int, label: str) -> str:
-    lines = [line.strip() for line in text.splitlines()]
+    lines = [
+        re.sub(r"\s+", "", unicodedata.normalize("NFKC", line))
+        for line in text.splitlines()
+    ]
     ended = False
     for index, line in enumerate(lines):
         if line != f"{race_number}R":
             continue
-        for following in lines[index + 1:index + 6]:
-            if re.fullmatch(r"(?:締切\d+分前|投票受付中|発売中)", following):
+        for following in lines[index + 1:index + 13]:
+            if re.fullmatch(r"(?:締切\d+分前|投票受付中|投票中|発売中)", following):
                 return following
-            if following == "終了":
+            if following in {"終了", "確定"}:
                 ended = True
     if ended:
         raise PdfInputError("POST_RACE_SOURCE", f"{label}はレース終了後の資料です")
-    raise PdfInputError("PRE_RACE_STATUS_NOT_FOUND", f"{label}のレース前状態を確認できません")
-
+    # Some mobile/browser print layouts omit the status badge. Absence alone
+    # must not stop a valid pre-race PDF; explicit 終了/確定 still stops it.
+    return "未取得（終了表示なし）"
 
 def _parse_hs_counts(hs_pdf: Path, bikes: list[int]) -> dict[int, dict[str, int]]:
     """KEIRIN.JP表を座標で読み、車番ごとのH・S回数を取得する。
@@ -224,47 +232,85 @@ def _parse_hs_counts(hs_pdf: Path, bikes: list[int]) -> dict[int, dict[str, int]
     raise PdfInputError("HS_PARSE_FAILED", "H・S表の全選手を正しく読み取れません")
 
 
+
 def _parse_riders(
     racecard_text: str,
     hs_rows: dict[int, dict[str, int]],
 ) -> list[dict[str, Any]]:
+    text = unicodedata.normalize("NFKC", racecard_text).replace("\u00a0", " ")
     stat_pattern = re.compile(
-        r"^\s*([1-9]{2})\s+([0-9]+\.[0-9]+)\s+(逃|追|両)"
+        r"^\s*([1-6])\s*([1-9])\s+([0-9]+\.[0-9]+)\s+(逃|追|両)"
         r"\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)"
         r"\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([0-9.]+)%",
         re.MULTILINE,
     )
-    stats = list(stat_pattern.finditer(racecard_text))
-    name_pattern = re.compile(
-        r"^\s{5,}([^\d\s][^\n]{1,20})\n\s+([^\s]+)\s+\d+歳\s*$",
-        re.MULTILINE,
-    )
-    names = list(name_pattern.finditer(racecard_text))
-    if len(stats) not in {5, 6, 7, 8, 9} or len(names) != len(stats):
-        raise PdfInputError("RIDER_PARSE_FAILED", "出走表の全選手を正しく読み取れません")
+    stats = list(stat_pattern.finditer(text))
+    if len(stats) not in {5, 6, 7, 8, 9}:
+        raise PdfInputError(
+            "RIDER_PARSE_FAILED",
+            f"出走表の成績行を正しく読み取れません（取得={len(stats)}人）",
+        )
 
-    bikes = [int(match.group(1)[-1]) for match in stats]
+    profile_pattern = re.compile(
+        r"(?m)^\s{2,}([^\d\s%.]{2,16})\s*$\n"
+        r"\s*([^\s]+)\s+(\d{2})歳\s*$"
+    )
+    profiles = [
+        {
+            "start": match.start(),
+            "name": match.group(1),
+            "prefecture_raw": match.group(2),
+        }
+        for match in profile_pattern.finditer(text)
+    ]
+    used_profiles: set[int] = set()
+    bikes = [int(match.group(2)) for match in stats]
     if set(hs_rows) != set(bikes):
         raise PdfInputError("HS_PARSE_FAILED", "H・S表の全選手を正しく読み取れません")
 
     riders: list[dict[str, Any]] = []
-    for stat, name in zip(stats, names):
-        bike = int(stat.group(1)[-1])
-        raw_prefecture = name.group(2)
+    for index, stat in enumerate(stats):
+        bike = int(stat.group(2))
+        block_end = stats[index + 1].start() if index + 1 < len(stats) else len(text)
+        candidates = [
+            profile for profile in profiles
+            if int(profile["start"]) not in used_profiles
+            and stat.end() <= int(profile["start"]) < block_end
+        ]
+        if not candidates:
+            candidates = [
+                profile for profile in profiles
+                if int(profile["start"]) not in used_profiles
+                and stat.start() - 500 <= int(profile["start"]) <= block_end + 1200
+            ]
+        profile = min(
+            candidates,
+            key=lambda item: abs(int(item["start"]) - stat.end()),
+            default=None,
+        )
+        if profile:
+            used_profiles.add(int(profile["start"]))
+            name = str(profile["name"]).replace(" ", "").replace("追加", "")
+            raw_prefecture = str(profile["prefecture_raw"])
+        else:
+            # Name and region are display/line-bonus fields only. Preserve all
+            # verified numeric rows instead of aborting on a page-break variant.
+            name = f"{bike}番車（氏名未取得）"
+            raw_prefecture = ""
+
         prefecture = _normalize_prefecture(raw_prefecture)
         riders.append({
             "bike": bike,
-            "name": name.group(1).replace(" ", "").replace("追加", ""),
-            # 地区は同地区ライン補正だけに使う。未知表記で全計算を止めず、
-            # 未取得として補正対象外にする。
+            "name": name,
             "region": PREFECTURE_TO_REGION[prefecture] if prefecture else "未取得",
-            "score": float(stat.group(2)),
-            "B": int(stat.group(5)),
-            "escape": int(stat.group(6)),
-            "makuri": int(stat.group(7)),
-            "sashi": int(stat.group(8)),
-            "mark": int(stat.group(9)),
-            "win_rate": float(stat.group(14)),
+            "prefecture_raw": raw_prefecture or "未取得",
+            "score": float(stat.group(3)),
+            "B": int(stat.group(6)),
+            "escape": int(stat.group(7)),
+            "makuri": int(stat.group(8)),
+            "sashi": int(stat.group(9)),
+            "mark": int(stat.group(10)),
+            "win_rate": float(stat.group(15)),
             "H": hs_rows[bike]["H"],
         })
     riders.sort(key=lambda rider: rider["bike"])
@@ -285,27 +331,42 @@ def _parse_lines(hs_pdf: Path, bikes: list[int]) -> list[list[int]]:
                     y = float(label["top"])
                     candidates = [
                         word for word in words
-                        if y + 12 <= float(word["top"]) <= y + 38
-                        and re.fullmatch(r"[1-9]", word["text"])
+                        if y + 10 <= float(word["top"]) <= y + 42
+                        and re.fullmatch(r"[1-9]", unicodedata.normalize("NFKC", word["text"]))
                     ]
                     candidates.sort(key=lambda word: float(word["x0"]))
-                    found = [int(word["text"]) for word in candidates]
+                    found = [int(unicodedata.normalize("NFKC", word["text"])) for word in candidates]
                     if sorted(found) != sorted(bikes):
                         continue
-                    lines: list[list[int]] = [[found[0]]]
+                    parsed: list[list[int]] = [[found[0]]]
                     previous_x = float(candidates[0]["x0"])
                     for word, bike in zip(candidates[1:], found[1:]):
                         x = float(word["x0"])
                         if x - previous_x > 42:
-                            lines.append([])
-                        lines[-1].append(bike)
+                            parsed.append([])
+                        parsed[-1].append(bike)
                         previous_x = x
-                    if sorted(bike for line in lines for bike in line) == sorted(bikes):
-                        return lines
-    except Exception as exc:
-        raise PdfInputError("LINE_PARSE_FAILED", "並び予想を読み取れません") from exc
-    raise PdfInputError("LINE_PARSE_FAILED", "並び予想を読み取れません")
+                    if sorted(bike for line in parsed for bike in line) == sorted(bikes):
+                        return parsed
+    except Exception:
+        pass
 
+    # Text-layout fallback for browsers that flatten PDF word coordinates.
+    text = unicodedata.normalize("NFKC", _extract_text(hs_pdf, "hs_pdf"))
+    marker = text.find("並び予想")
+    window = text[marker:marker + 1200] if marker >= 0 else text[:1200]
+    for raw_line in window.splitlines():
+        found = [int(value) for value in re.findall(r"(?<!\d)[1-9](?!\d)", raw_line)]
+        if sorted(found) != sorted(bikes):
+            continue
+        parsed = []
+        for segment in re.split(r"\s{8,}", raw_line.strip()):
+            members = [int(value) for value in re.findall(r"(?<!\d)[1-9](?!\d)", segment)]
+            if members:
+                parsed.append(members)
+        if sorted(bike for line in parsed for bike in line) == sorted(bikes):
+            return parsed
+    raise PdfInputError("LINE_PARSE_FAILED", "並び予想を読み取れません")
 
 def _parse_odds(odds_text: str, bikes: list[int]) -> list[list[float | None]]:
     total = len(bikes) * (len(bikes) - 1)
@@ -356,23 +417,39 @@ def normalize_pdfs(
         "hs_pdf": _check_pdf(hs_pdf, "hs_pdf"),
         "odds_pdf": _check_pdf(odds_pdf, "odds_pdf"),
     }
-    racecard_text = _extract_text(paths["racecard_pdf"], "racecard_pdf")
-    hs_text = _extract_text(paths["hs_pdf"], "hs_pdf")
-    odds_text = _extract_text(paths["odds_pdf"], "odds_pdf")
+    racecard_text = unicodedata.normalize(
+        "NFKC", _extract_text(paths["racecard_pdf"], "racecard_pdf")
+    ).replace("\u00a0", " ")
+    hs_text = unicodedata.normalize(
+        "NFKC", _extract_text(paths["hs_pdf"], "hs_pdf")
+    ).replace("\u00a0", " ")
+    odds_text = unicodedata.normalize(
+        "NFKC", _extract_text(paths["odds_pdf"], "odds_pdf")
+    ).replace("\u00a0", " ")
 
     identities = {
         "racecard_pdf": _identity(racecard_text, paths["racecard_pdf"].name),
         "hs_pdf": _identity(hs_text, paths["hs_pdf"].name),
         "odds_pdf": _identity(odds_text, paths["odds_pdf"].name),
     }
-    identity_values = {
-        (item["venue"], item["date"], item["race"]) for item in identities.values()
+    venue_races = {
+        (item["venue"], item["race"]) for item in identities.values()
+        if item["venue"] is not None and item["race"] is not None
     }
-    if None in {value for identity in identities.values() for value in identity.values()}:
-        raise PdfInputError("RACE_ID_NOT_FOUND", "3PDFの開催・日付・レース番号を確認できません")
-    if len(identity_values) != 1:
-        raise PdfInputError("RACE_MISMATCH", "3PDFが同一レースではありません")
-    identity = next(iter(identities.values()))
+    if len(venue_races) != 1 or any(
+        item["venue"] is None or item["race"] is None
+        for item in identities.values()
+    ):
+        raise PdfInputError("RACE_ID_NOT_FOUND", "3PDFの開催場・レース番号を確認できません")
+    dates = {item["date"] for item in identities.values() if item["date"] is not None}
+    if len(dates) > 1:
+        raise PdfInputError("RACE_MISMATCH", "3PDFの日付が一致しません")
+    venue, race_value = next(iter(venue_races))
+    identity = {
+        "venue": venue,
+        "race": race_value,
+        "date": next(iter(dates), None),
+    }
     race_number = int(identity["race"])
     source_status = {
         "racecard_pdf": _pre_race_status(racecard_text, race_number, "racecard_pdf"),
@@ -380,9 +457,9 @@ def normalize_pdfs(
     }
 
     stat_bikes = [
-        int(match.group(1)[-1])
+        int(match.group(2))
         for match in re.finditer(
-            r"^\s*([1-9]{2})\s+[0-9]+\.[0-9]+\s+(?:逃|追|両)",
+            r"^\s*([1-6])\s*([1-9])\s+[0-9]+\.[0-9]+\s+(?:逃|追|両)",
             racecard_text,
             re.MULTILINE,
         )
@@ -424,6 +501,11 @@ def normalize_pdfs(
         "result_data_used": False,
         "web_data_used": False,
         "pre_race_status": source_status,
+        "compatibility_warnings": [
+            f"{rider['bike']}番: 氏名または地区を取得できず数値項目のみ使用"
+            for rider in riders
+            if rider["name"].endswith("氏名未取得）") or rider["region"] == "未取得"
+        ],
     }
     return payload, audit
 
