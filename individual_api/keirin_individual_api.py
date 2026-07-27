@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 
-VERSION = "1.1.2-individual-frozen"
+VERSION = "1.1.3-pdf-region-compat"
 N_SIMULATIONS = 100_000
 REQUIRED_SOURCE_KEYS = {"racecard_pdf", "hs_pdf", "odds_pdf"}
 REQUIRED_RIDER_FIELDS = {
@@ -208,7 +208,12 @@ def _predict_strict(payload: dict[str, Any]) -> dict[str, Any]:
     control_scores, line_scores = [], []
     for root in roots:
         members, ri = lines[root], idx[root]
-        same_region = float(len(members) > 1 and len({riders[idx[b]]["region"] for b in members}) == 1)
+        member_regions = {riders[idx[b]]["region"] for b in members}
+        same_region = float(
+            len(members) > 1
+            and "未取得" not in member_regions
+            and len(member_regions) == 1
+        )
         bank = 0.0
         if bank_type == "335_indoor":
             bank = 0.10
