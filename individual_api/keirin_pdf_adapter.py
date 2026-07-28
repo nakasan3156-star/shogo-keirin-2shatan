@@ -232,19 +232,44 @@ def _parse_hs_counts(hs_pdf: Path, bikes: list[int]) -> dict[int, dict[str, int]
     raise PdfInputError("HS_PARSE_FAILED", "H・S表の全選手を正しく読み取れません")
 
 
+RIDER_STAT_PATTERN = re.compile(
+    # Depending on how the browser prints netkeirin, the coloured frame-number
+    # cell can disappear from the PDF text layer.  The frame is not used by the
+    # model, so accept both "11 100.00 ..." and "1 100.00 ..." layouts while
+    # still requiring the complete numeric performance row.
+    r"^\s*(?:([1-6])\s*)?([1-9])\s+([0-9]+\.[0-9]+)\s+(逃|追|両)"
+    r"\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)"
+    r"\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([0-9.]+)\s*[%％]?",
+    re.MULTILINE,
+)
+
+
+def _rider_stat_rows(racecard_text: str) -> list[re.Match[str]]:
+    text = unicodedata.normalize("NFKC", racecard_text).replace("\u00a0", " ")
+    matches = list(RIDER_STAT_PATTERN.finditer(text))
+
+    # A repeated table header/page fragment may duplicate a row.  Keep exactly
+    # one verified row per bike; conflicting duplicate rows remain an error.
+    rows_by_bike: dict[int, re.Match[str]] = {}
+    for match in matches:
+        bike = int(match.group(2))
+        previous = rows_by_bike.get(bike)
+        if previous is not None and previous.groups()[2:] != match.groups()[2:]:
+            raise PdfInputError(
+                "RIDER_PARSE_FAILED",
+                f"出走表の{bike}番車の成績行が重複しています",
+            )
+        rows_by_bike.setdefault(bike, match)
+    return sorted(rows_by_bike.values(), key=lambda match: int(match.group(2)))
+
+
 
 def _parse_riders(
     racecard_text: str,
     hs_rows: dict[int, dict[str, int]],
 ) -> list[dict[str, Any]]:
     text = unicodedata.normalize("NFKC", racecard_text).replace("\u00a0", " ")
-    stat_pattern = re.compile(
-        r"^\s*([1-6])\s*([1-9])\s+([0-9]+\.[0-9]+)\s+(逃|追|両)"
-        r"\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)"
-        r"\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([0-9.]+)%",
-        re.MULTILINE,
-    )
-    stats = list(stat_pattern.finditer(text))
+    stats = _rider_stat_rows(text)
     if len(stats) not in {5, 6, 7, 8, 9}:
         raise PdfInputError(
             "RIDER_PARSE_FAILED",
@@ -456,14 +481,7 @@ def normalize_pdfs(
         "odds_pdf": _pre_race_status(odds_text, race_number, "odds_pdf"),
     }
 
-    stat_bikes = [
-        int(match.group(2))
-        for match in re.finditer(
-            r"^\s*([1-6])\s*([1-9])\s+[0-9]+\.[0-9]+\s+(?:逃|追|両)",
-            racecard_text,
-            re.MULTILINE,
-        )
-    ]
+    stat_bikes = [int(match.group(2)) for match in _rider_stat_rows(racecard_text)]
     hs_rows = _parse_hs_counts(paths["hs_pdf"], stat_bikes)
     riders = _parse_riders(racecard_text, hs_rows)
     bikes = [rider["bike"] for rider in riders]
