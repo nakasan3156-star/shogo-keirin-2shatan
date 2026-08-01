@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 
 
-VERSION = "1.1.4-pdf-resilient"
+VERSION = "1.1.5-grade-compat"
 N_SIMULATIONS = 100_000
 REQUIRED_SOURCE_KEYS = {"racecard_pdf", "hs_pdf", "odds_pdf"}
 REQUIRED_RIDER_FIELDS = {
@@ -82,8 +82,8 @@ def _validate(payload: Any) -> dict[str, Any] | None:
     )
     if missing_sources:
         return _error("MISSING_SOURCE", "固定入力3点が揃っていません", missing_sources)
-    if payload.get("grade") not in {"F1", "G3", "G1"}:
-        return _error("INVALID_GRADE", "gradeはF1/G3/G1のいずれかです")
+    if payload.get("grade") not in {"F1", "F2", "G1", "G2", "G3", "UNKNOWN"}:
+        return _error("INVALID_GRADE", "gradeはF1/F2/G1/G2/G3/UNKNOWNのいずれかです")
     riders = payload.get("riders")
     if not isinstance(riders, list) or len(riders) < 5:
         return _error("INVALID_RIDERS", "ridersは5人以上必要です")
@@ -330,6 +330,7 @@ def _predict_strict(payload: dict[str, Any]) -> dict[str, Any]:
     grade_enabled = payload["grade"] in CONFIG.purchase_grades
     return {
         "version": VERSION, "status": "OK", "seed": seed, "simulations": N_SIMULATIONS,
+        "grade": payload["grade"],
         "purchase_status": "CANDIDATES" if grade_enabled and candidates else "NO_BET",
         "grade_enabled": grade_enabled, "input_complete": True,
         "predicted_control": predicted_control, "control_confidence": float(control_p.max()),
