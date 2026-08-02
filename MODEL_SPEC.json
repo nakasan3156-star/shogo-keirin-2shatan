@@ -1,24 +1,23 @@
 {
   "name": "章悟式∞競輪OS しょーご式5点＋市場残差3点 API",
   "version": "1.2.0-dual-strategy",
-  "status": "keirin_jp_6pdf_dual_strategy",
+  "status": "keirin_jp_5pdf_dual_strategy",
   "bet_type": "2車単",
   "race_type": "MEN_ONLY",
   "input_source": "KEIRIN.JP_ONLY",
   "inputs": [
-    "KEIRIN.JP 基本情報PDF",
-    "KEIRIN.JP 直近成績PDF",
-    "KEIRIN.JP 対戦成績PDF",
-    "KEIRIN.JP 当場成績PDF",
+    "KEIRIN.JP 基本情報・並び予想PDF",
+    "KEIRIN.JP 直近成績①PDF",
+    "KEIRIN.JP 直近成績②PDF",
     "KEIRIN.JP 着度数・H・S回数PDF",
     "KEIRIN.JP 2車単オッズPDF"
   ],
   "optional_inputs": ["EXデータスクリーンショット"],
   "ability_inputs": {
     "basic": ["競走得点", "逃", "捲", "差", "マ", "B", "脚質", "ライン"],
-    "recent": "直近成績補正",
-    "matchup": "対戦成績補正",
-    "track": "当場成績補正",
+    "recent_short": "直近成績①補正",
+    "recent_detail": "直近成績②補正",
+    "recent_combination": "equal_average",
     "hs": ["1着", "2着", "3着", "着外", "H", "S"]
   },
   "strategies": {
@@ -43,6 +42,11 @@
   },
   "common_candidates_policy": "表示のみ。2方式を混ぜて再計算しない",
   "women_policy": "WOMEN_EXCLUDED / NO_BET",
-  "forbidden_prediction_inputs": ["Web自動取得", "レース結果", "レース後データ", "推測による欠損補完"],
+  "forbidden_prediction_inputs": [
+    "Web自動取得",
+    "レース結果",
+    "レース後データ",
+    "推測による欠損補完"
+  ],
   "failure_policy": "INPUT_ERROR / NO_BET"
 }
