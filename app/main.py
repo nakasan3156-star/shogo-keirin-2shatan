@@ -50,7 +50,7 @@ def health() -> dict[str, Any]:
         "required_documents": [
             "netkeirin出走表PDF",
             "KEIRIN.JP H・S回数PDF",
-            "netkeirin 2車単オッズPDF",
+            "KEIRIN.JP 2車単オッズPDF",
         ],
         "optional_inputs": ["EXデータスクショ"],
         "strategies": {
@@ -104,7 +104,7 @@ async def analyze(
             odds_path = _upload_path(root, odds_pdf, "odds")
             await _save_upload(racecard_pdf, racecard_path, "出走表PDF")
             await _save_upload(hs_pdf, hs_path, "H・S回数PDF")
-            await _save_upload(odds_pdf, odds_path, "2車単オッズPDF")
+            await _save_upload(odds_pdf, odds_path, "KEIRIN.JP 2車単オッズPDF")
 
             ex_path: Path | None = None
             if ex_image is not None and ex_image.filename:
@@ -185,7 +185,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#111827;color:#d1fae5;
 <form id="form">
 <label>① netkeirin 出走表PDF</label><input type="file" name="racecard_pdf" accept="application/pdf" required>
 <label>② KEIRIN.JP H・S回数PDF</label><input type="file" name="hs_pdf" accept="application/pdf" required>
-<label>③ netkeirin 2車単オッズPDF</label><input type="file" name="odds_pdf" accept="application/pdf" required>
+<label>③ KEIRIN.JP 2車単オッズPDF</label><input type="file" name="odds_pdf" accept="application/pdf" required>
 <label>EXデータスクショ（任意）</label><input type="file" name="ex_image" accept="image/png,image/jpeg,image/webp">
 <label>残差λ（0＝市場のみ、1＝能力のみ）</label><input type="number" name="lambda_value" min="0" max="1" step="0.05" value="0.50">
 <label>専用PIN</label><input type="password" name="pin" autocomplete="current-password">
