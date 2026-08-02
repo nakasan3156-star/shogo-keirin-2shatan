@@ -1,0 +1,55 @@
+from keirin_real_pdf_adapter import parse_basic_real, parse_hs_real
+
+
+BASIC_TEXT = '''
+   1 片山  智晴
+     岡 山/S2A1/追                             93.20        0        0    1    3     0
+   2 伊藤  大彦
+     徳 島/A1A1/追                             86.82        0        1    3    1     0
+   3 浅見  隼追加
+     福 岡/A1A1/逃                             85.12        5        5    1    0     6
+   4 中武三四郎
+     大 阪/A1A2/逃                             84.37        8        1    0    0     15
+   5 仲松  勝太
+     沖 縄/A2A2/追                             84.19        0        0    5    0     0
+   6 山原  利秀
+     高 知/A3A2/追                             75.38        0        0    3    2     0
+   7 柏野  健吾
+     岡 山/A3A2/逃                             73.09        14       3    0    0     19
+'''
+
+HS_TEXT = '''
+   1 片山  智晴
+     岡 山/S2A1/追                             1       3              3       18         1       0
+   2 伊藤  大彦
+     徳 島/A1A1/追                             2       3              9       9          1       1
+   3 浅見  隼追加
+     福 岡/A1A1/逃                             6       5              0       13         8       0
+   4 中武三四郎
+     大 阪/A1A2/逃                             3       6              5       13         14      3
+   5 仲松  勝太
+     沖 縄/A2A2/追                             1       4              5       11         0       5
+   6 山原  利秀
+     高 知/A3A2/追                             2       3              3       10         0       0
+   7 柏野  健吾
+     岡 山/A3A2/逃                             6       11             0       15         19      0
+'''
+
+
+def test_actual_keirin_jp_layout_reads_seven_riders():
+    riders = parse_basic_real(BASIC_TEXT)
+    assert len(riders) == 7
+    assert [rider["bike"] for rider in riders] == list(range(1, 8))
+    assert riders[0]["name"] == "片山智晴"
+    assert riders[2]["name"] == "浅見隼"
+    assert riders[3]["B"] == 15
+    assert riders[6]["escape"] == 14
+
+
+def test_actual_keirin_jp_layout_reads_all_hs_rows():
+    rows = parse_hs_real(HS_TEXT, list(range(1, 8)))
+    assert set(rows) == set(range(1, 8))
+    assert rows[1]["first"] == 1
+    assert rows[4]["H"] == 14
+    assert rows[5]["S"] == 5
+    assert rows[7]["second"] == 11
