@@ -1,4 +1,4 @@
-name: KEIRIN Real PDF CI
+name: KEIRIN Resilient PDF CI
 
 on:
   pull_request:
@@ -25,6 +25,7 @@ jobs:
           PYTHONPATH: .:individual_api
         run: |
           pytest -q \
+            individual_api/test_keirin_resilience_fix.py \
             individual_api/test_keirin_odds_runtime_fix.py \
             individual_api/test_keirin_real_pdf_adapter.py \
             individual_api/test_keirin_bundle_adapter.py \
@@ -39,8 +40,10 @@ jobs:
           from app.main import health
           result = health()
           assert result["status"] == "ok"
-          assert result["model_status"] == "keirin_jp_real_pdf_full_parse"
-          assert result["selection_method"] == "real_full_parse"
+          assert result["model_status"] == "keirin_jp_resilient_pdf_parse"
+          assert result["selection_method"] == "real_full_parse_with_safe_fallbacks"
+          assert result["closed_odds"] == "allowed"
+          assert result["missing_lines"] == "singleton_fallback"
           assert result["upload_mode"] == "multiple_pdfs_auto_detect"
           assert len(result["required_roles"]) == 3
           assert result["strategies"]["shogo"] == 5
