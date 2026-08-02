@@ -1,139 +1,68 @@
-# 章悟式∞競輪OS Ver.1.1 個人評価型 2車単API（暫定固定）
+# 章悟式∞競輪OS 2方式2車単API
 
 ## 固定入力
 
-1. netkeirin出走表PDF
+1. netkeirin 出走表PDF
 2. KEIRIN.JP「着度数・H・S回数」PDF
-3. netkeirin 2車単オッズPDF
+3. KEIRIN.JP 2車単オッズPDF
+4. EXデータスクリーンショットは任意
 
-netkeirin EXデータスクリーンショットは任意。添付がなくても処理を続行し、`missing_optional` に記録する。並びはnetkeirin出走表から取得し、並び自体が読めない場合は推測せず `INPUT_ERROR / NO_BET` とする。
+Web検索・結果データ・払戻・レース後情報は予測に使用しない。開催場、日付、レース番号、全選手、H/B、並び、全2車単オッズのいずれかが欠ければ `INPUT_ERROR / NO_BET` とする。
 
-Web検索・結果データは本番予測に使用しない。読み取れない必須値は推測せず `INPUT_ERROR / NO_BET` とする。
+KEIRIN.JPオッズPDFは「○番車 全選択」の表を座標で解析し、ページをまたいでも1着車ごとの列を維持する。7車は42通り、9車は72通りがすべて揃わない限り計算しない。`○Rは締め切りました` を含む締切後PDFは `POST_RACE_SOURCE / NO_BET` で拒否する。
 
-## 固定処理順
+## 共通の能力予測
 
 1. 選手一人ずつ基礎能力を計算
 2. 先頭・番手・3番手以降・単騎の役割別能力を計算
-3. 相手内で標準化
-4. 最後にライン長・同地区・バンク条件を補正
-5. B主導権と4展開を確率化
-6. 固定シードで10万回シミュレーション
-7. 全2車単確率を確定
-8. 確率確定後にのみオッズを使用してEVを計算
+3. ライン長・同地区・バンク条件を補正
+4. 主導権と展開シナリオを確率化
+5. 固定シードで10万回シミュレーション
+6. 全2車単の能力確率を確定
+7. 確率確定後にのみKEIRIN.JPオッズを結合
 
-同一入力からは同じシード・同じ確率・同じ候補を返す。
+同一入力と同一λからは同じ結果を返す。
 
-## 購入候補条件
+## しょーご式
 
-- FⅠ・GⅢのみ
-- GⅠは `NO_BET`
-- 8.0～30.0倍
-- Wilson 90%下限による保守EV 1.10以上
-- 推定確率1%以上
-- B確信度38%以上
-- 展開確信度35%以上
-- 最大2点
+- 能力確率を使用
+- Wilson下限から保守EVを算出
+- 保守EV上位5点を固定出力
 
-APIは実際の投票を行わず候補だけを返す。
+## 市場残差システム
 
-## 起動と呼び出し
-
-必要環境はPython 3.10以上とNumPy。
-
-```bash
-python keirin_api_server.py
+```text
+市場確率 ×（能力確率 ÷ 市場確率）^ λ
 ```
+
+- 市場確率はKEIRIN.JPの全2車単オッズの逆数を正規化
+- λ初期値は0.50
+- λ=0は市場のみ、λ=1は能力のみ
+- 混合確率を正規化後、固定シードで10万回再計算
+- 保守EV上位3点を固定出力
+
+2方式は別々に計算し、共通買い目は表示だけに使用する。
+
+## 対象外
+
+- 女子競輪
+- ガールズケイリン
+- L級
+
+対象外は `WOMEN_EXCLUDED / NO_BET` を返す。
+
+## API
 
 - `GET /health`: 稼働確認
-- `POST /predict`: 正規化済みJSONから予測
+- `POST /predict`: 正規化済みJSON
+- `POST /predict-files`: 3PDFから予測
+- Render版は `POST /analyze`
 
-最小入力形:
-
-```json
-{
-  "grade": "F1",
-  "source_files": {
-    "racecard_pdf": "racecard.pdf",
-    "hs_pdf": "hs.pdf",
-    "odds_pdf": "odds.pdf"
-  },
-  "riders": [
-    {
-      "bike": 1,
-      "name": "選手名",
-      "region": "関東",
-      "score": 101.2,
-      "win_rate": 18.0,
-      "escape": 3,
-      "makuri": 5,
-      "sashi": 1,
-      "mark": 0,
-      "H": 8,
-      "B": 12
-    }
-  ],
-  "lines": [[1, 2, 3], [4, 5], [6, 7]],
-  "odds": [[null, 12.4], [8.9, null]],
-  "conditions": {
-    "bank_type": "400_outdoor",
-    "wind_mps": 2.0,
-    "temperature_c": 24.0
-  }
-}
-```
-
-例では構造を短く示すため選手・オッズを省略している。実入力では全出走選手と全2車単を入れる。
-
-## ブラインド検証
-
-- 30レース
-- 候補19点
-- 的中3点
-- 的中オッズ: 8.9倍、12.8倍、18.9倍
-- 投資換算: 1,900円
-- 払戻換算: 4,060円
-- 回収率: 213.7%
-- 最大払戻依存率: 46.6%
-
-グレード別ではFⅠ 361.7%、GⅢ 270.0%、GⅠ 0%。この結果に基づき、GⅠ購入を停止する。
-
-30レースは採用可否を最終確定するには少ないため、この版は係数を変えずに追加ブラインド検証する暫定固定版とする。
-
-## API境界
-
-`keirin_individual_api.predict(payload)` は正規化済み入力を受け取る計算エンジン。PDF/OCRアダプターは3ファイルを同じ正規形へ変換し、必須値の読取可否を記録する。
-
-`keirin_pdf_adapter.predict_from_files(racecard_pdf, hs_pdf, odds_pdf)` は固定3PDFを直接受け取る。開催場・日付・レース番号が3PDFで一致すること、全選手、H、並び、全2車単が揃うことを確認してから計算エンジンを実行する。
-
-HTTPでは `POST /predict-files` に `multipart/form-data` で次のフィールドを送る。
+`predict-files` のフィールド:
 
 - `racecard_pdf`: netkeirin出走表PDF
-- `hs_pdf`: KEIRIN.JPの着度数・H・S回数PDF
-- `odds_pdf`: netkeirin 2車単オッズPDF
+- `hs_pdf`: KEIRIN.JP H・S回数PDF
+- `odds_pdf`: KEIRIN.JP 2車単オッズPDF
 - `ex_image`: 任意
 
-```bash
-curl -X POST http://127.0.0.1:8787/predict-files \
-  -F "racecard_pdf=@racecard.pdf" \
-  -F "hs_pdf=@hs.pdf" \
-  -F "odds_pdf=@odds.pdf"
-```
-
 必要環境はPython 3.10以上、NumPy、pdfplumber、Popplerの `pdftotext`。
-
-空ファイル、破損PDF、別レース混在、選手欠損、H欠損、並び読取失敗、2車単欠損のいずれかがあれば、予測や購入候補を出さず `INPUT_ERROR / NO_BET` を返す。
-
-青森2026年7月23日10Rの実PDF3点で、開催照合、7選手、並び `5-1 / 2-4-6 / 3-7`、全42通りの2車単、10万回シミュレーションまで通し確認済み。同じ3PDFで同じ出力になることも確認済み。
-
-`riders` は車番昇順とし、`odds` の行・列も同じ車番順とする。対角以外に欠損・非数・0以下のオッズがあれば、候補を出さず `INPUT_ERROR / NO_BET` とする。
-
-主な出力:
-
-- 個人・役割別能力値
-- 各選手1着率・2着率
-- B主導権候補と確信度
-- 展開確率
-- 全2車単確率
-- 参考EV
-- 購入候補または `NO_BET`
-- 欠損・監査情報
