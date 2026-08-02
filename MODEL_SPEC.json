@@ -1,28 +1,30 @@
 {
   "name": "章悟式∞競輪OS しょーご式5点＋市場残差3点 API",
   "version": "1.2.0-dual-strategy",
-  "status": "dual_strategy",
+  "status": "keirin_jp_6pdf_dual_strategy",
   "bet_type": "2車単",
   "race_type": "MEN_ONLY",
+  "input_source": "KEIRIN.JP_ONLY",
   "inputs": [
-    "netkeirin出走表PDF",
+    "KEIRIN.JP 基本情報PDF",
+    "KEIRIN.JP 直近成績PDF",
+    "KEIRIN.JP 対戦成績PDF",
+    "KEIRIN.JP 当場成績PDF",
     "KEIRIN.JP 着度数・H・S回数PDF",
     "KEIRIN.JP 2車単オッズPDF"
   ],
-  "optional_inputs": [
-    "EXデータスクリーンショット"
-  ],
-  "shared_prediction_order": [
-    "選手個人能力",
-    "役割適性",
-    "ライン補正",
-    "展開シナリオ",
-    "10万回モンテカルロ",
-    "2車単能力確率"
-  ],
+  "optional_inputs": ["EXデータスクリーンショット"],
+  "ability_inputs": {
+    "basic": ["競走得点", "逃", "捲", "差", "マ", "B", "脚質", "ライン"],
+    "recent": "直近成績補正",
+    "matchup": "対戦成績補正",
+    "track": "当場成績補正",
+    "hs": ["1着", "2着", "3着", "着外", "H", "S"]
+  },
   "strategies": {
     "shogo": {
       "candidate_count": 5,
+      "ability_simulations": 100000,
       "ranking": "能力確率から算出した保守EV降順"
     },
     "residual": {
@@ -36,18 +38,11 @@
   },
   "odds_input": {
     "source": "KEIRIN.JP",
-    "bet_type": "2車単オッズ",
-    "parser": "coordinate_grouped_by_first_bike",
     "requires_all_pairs": true,
     "post_close_policy": "POST_RACE_SOURCE / NO_BET"
   },
   "common_candidates_policy": "表示のみ。2方式を混ぜて再計算しない",
   "women_policy": "WOMEN_EXCLUDED / NO_BET",
-  "forbidden_prediction_inputs": [
-    "Web自動取得",
-    "レース結果",
-    "レース後データ",
-    "推測による欠損補完"
-  ],
+  "forbidden_prediction_inputs": ["Web自動取得", "レース結果", "レース後データ", "推測による欠損補完"],
   "failure_policy": "INPUT_ERROR / NO_BET"
 }
