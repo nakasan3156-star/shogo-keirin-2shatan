@@ -15,7 +15,10 @@ from individual_api.keirin_pdf_adapter import PdfInputError, _input_error
 install_odds_parser_fix()
 
 from individual_api.keirin_real_pdf_adapter import normalize_real_bundle
+from individual_api.keirin_resilience_fix import install_resilience_fix
 from .bundle_ui import INDEX_HTML
+
+install_resilience_fix()
 
 app = FastAPI(title="章悟式∞競輪OS 実PDF検証API", version=VERSION)
 
@@ -30,11 +33,13 @@ def _check_pin(pin: str) -> None:
 def health() -> dict[str, Any]:
     return {
         "status": "ok",
-        "model_status": "keirin_jp_real_pdf_full_parse",
+        "model_status": "keirin_jp_resilient_pdf_parse",
         "upload_mode": "multiple_pdfs_auto_detect",
         "required_roles": ["基本情報", "着度数・H・S回数", "2車単オッズ"],
-        "selection_method": "real_full_parse",
+        "selection_method": "real_full_parse_with_safe_fallbacks",
         "extra_pdfs": "ignored",
+        "closed_odds": "allowed",
+        "missing_lines": "singleton_fallback",
         "strategies": {"shogo": 5, "residual": 3},
     }
 
@@ -95,6 +100,17 @@ async def _run_bundle(
         except PdfInputError as exc:
             result = _input_error(exc)
             result["version"] = VERSION
+        except Exception:
+            result = {
+                "version": VERSION,
+                "status": "PROCESSING_ERROR",
+                "purchase_status": "NO_BET",
+                "error": {
+                    "code": "SAFE_PROCESSING_STOP",
+                    "message": "PDF解析を安全停止しました。PDFを入れ直してください。",
+                    "missing": [],
+                },
+            }
         return JSONResponse(
             status_code=200 if result.get("status") == "OK" else 422,
             content=result,
