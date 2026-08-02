@@ -37,7 +37,8 @@ jobs:
           result = health()
           assert result["status"] == "ok"
           assert result["model_status"] == "keirin_jp_3pdf_dual_strategy"
-          assert len(result["required_documents"]) == 3
+          assert len(result["required_documents"]) == 2
+          assert "×2" in result["required_documents"][0]
           assert result["strategies"]["shogo"] == 5
           assert result["strategies"]["residual"] == 3
           print(result)
