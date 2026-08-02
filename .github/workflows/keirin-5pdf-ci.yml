@@ -1,4 +1,4 @@
-name: KEIRIN 3PDF CI
+name: KEIRIN Bundle CI
 
 on:
   pull_request:
@@ -25,6 +25,7 @@ jobs:
           PYTHONPATH: .:individual_api
         run: |
           pytest -q \
+            individual_api/test_keirin_bundle_adapter.py \
             individual_api/test_keirin_jp_3pdf_adapter.py \
             individual_api/test_keirin_dual_strategy_api.py \
             individual_api/test_keirin_jp_odds_parser.py
@@ -36,9 +37,10 @@ jobs:
           from app.main import health
           result = health()
           assert result["status"] == "ok"
-          assert result["model_status"] == "keirin_jp_3pdf_dual_strategy"
-          assert len(result["required_documents"]) == 2
-          assert "×2" in result["required_documents"][0]
+          assert result["model_status"] == "keirin_jp_bundle_auto_detect"
+          assert result["upload_mode"] == "multiple_pdfs_auto_detect"
+          assert len(result["required_roles"]) == 3
+          assert result["extra_pdfs"] == "ignored"
           assert result["strategies"]["shogo"] == 5
           assert result["strategies"]["residual"] == 3
           print(result)
