@@ -9,7 +9,11 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from individual_api.keirin_dual_strategy_api import VERSION, predict
+from individual_api.keirin_odds_runtime_fix import install_odds_parser_fix
 from individual_api.keirin_pdf_adapter import PdfInputError, _input_error
+
+install_odds_parser_fix()
+
 from individual_api.keirin_real_pdf_adapter import normalize_real_bundle
 from .bundle_ui import INDEX_HTML
 
