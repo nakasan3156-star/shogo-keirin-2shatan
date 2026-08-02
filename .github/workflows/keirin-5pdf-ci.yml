@@ -1,12 +1,10 @@
-name: KEIRIN 5PDF CI
+name: KEIRIN 3PDF CI
 
 on:
   pull_request:
     paths:
       - "app/**"
       - "individual_api/**"
-      - "MODEL_SPEC.json"
-      - "README.md"
       - ".github/workflows/keirin-5pdf-ci.yml"
   workflow_dispatch:
 
@@ -27,7 +25,7 @@ jobs:
           PYTHONPATH: .:individual_api
         run: |
           pytest -q \
-            individual_api/test_keirin_jp_5pdf_adapter.py \
+            individual_api/test_keirin_jp_3pdf_adapter.py \
             individual_api/test_keirin_dual_strategy_api.py \
             individual_api/test_keirin_jp_odds_parser.py
       - name: FastAPI smoke test
@@ -38,9 +36,9 @@ jobs:
           from app.main import health
           result = health()
           assert result["status"] == "ok"
-          assert result["model_status"] == "keirin_jp_5pdf_dual_strategy"
-          assert len(result["required_documents"]) == 5
-          assert result["strategies"]["shogo"]["candidate_count"] == 5
-          assert result["strategies"]["residual"]["candidate_count"] == 3
+          assert result["model_status"] == "keirin_jp_3pdf_dual_strategy"
+          assert len(result["required_documents"]) == 3
+          assert result["strategies"]["shogo"] == 5
+          assert result["strategies"]["residual"] == 3
           print(result)
           PY
