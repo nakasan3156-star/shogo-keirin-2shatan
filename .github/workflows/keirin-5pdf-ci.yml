@@ -1,0 +1,46 @@
+name: KEIRIN 5PDF CI
+
+on:
+  pull_request:
+    paths:
+      - "app/**"
+      - "individual_api/**"
+      - "MODEL_SPEC.json"
+      - "README.md"
+      - ".github/workflows/keirin-5pdf-ci.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Compile
+        run: python -m compileall -q app individual_api
+      - name: Regression tests
+        env:
+          PYTHONPATH: .:individual_api
+        run: |
+          pytest -q \
+            individual_api/test_keirin_jp_5pdf_adapter.py \
+            individual_api/test_keirin_dual_strategy_api.py \
+            individual_api/test_keirin_jp_odds_parser.py
+      - name: FastAPI smoke test
+        env:
+          PYTHONPATH: .:individual_api
+        run: |
+          python - <<'PY'
+          from app.main import health
+          result = health()
+          assert result["status"] == "ok"
+          assert result["model_status"] == "keirin_jp_5pdf_dual_strategy"
+          assert len(result["required_documents"]) == 5
+          assert result["strategies"]["shogo"]["candidate_count"] == 5
+          assert result["strategies"]["residual"]["candidate_count"] == 3
+          print(result)
+          PY
