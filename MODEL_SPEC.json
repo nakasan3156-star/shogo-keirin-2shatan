@@ -7,7 +7,7 @@
   "inputs": [
     "netkeirin出走表PDF",
     "KEIRIN.JP 着度数・H・S回数PDF",
-    "netkeirin 2車単オッズPDF"
+    "KEIRIN.JP 2車単オッズPDF"
   ],
   "optional_inputs": [
     "EXデータスクリーンショット"
@@ -33,6 +33,13 @@
       "residual_simulations": 100000,
       "ranking": "残差補正後確率から算出した保守EV降順"
     }
+  },
+  "odds_input": {
+    "source": "KEIRIN.JP",
+    "bet_type": "2車単オッズ",
+    "parser": "coordinate_grouped_by_first_bike",
+    "requires_all_pairs": true,
+    "post_close_policy": "POST_RACE_SOURCE / NO_BET"
   },
   "common_candidates_policy": "表示のみ。2方式を混ぜて再計算しない",
   "women_policy": "WOMEN_EXCLUDED / NO_BET",
