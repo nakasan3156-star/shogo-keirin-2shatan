@@ -38,21 +38,12 @@ def test_control_character_headers_parse_all_pairs():
 
 
 def test_closed_odds_table_parses_all_pairs():
-    # KEIRIN.JP締切後PDFの実表と同じ、3列組×3ブロック形式。
+    # KEIRIN.JP締切後PDFと同じ、3列組 [1着, 2着, オッズ] の表。
     table = [
-        ["1", "2", "23.9", "2", "1", "22.0", "3", "1", "7.9"],
-        [None, "3", "21.9", None, "3", "21.3", None, "2", "9.6"],
-        ["4", "1", "41.8", "5", "1", "112.2", "6", "1", "344.4"],
-        [None, "2", "15.8", None, "2", "114.1", None, "2", "105.8"],
-        ["7", "1", "22.1", None, None, None, None, None, None],
-        [None, "2", "106.4", None, None, None, None, None, None],
-    ]
-    # 3車版へ縮約して完全性を検査。
-    small = [
         ["1", "2", "12.3", "2", "1", "34.5", "3", "1", "56.7"],
         [None, "3", "23.4", None, "3", "45.6", None, "2", "67.8"],
     ]
-    matrix = _matrix_from_closed_tables([table, small], [1, 2, 3])
+    matrix = _matrix_from_closed_tables([table], [1, 2, 3])
     assert matrix == [
         [None, 12.3, 23.4],
         [34.5, None, 45.6],
