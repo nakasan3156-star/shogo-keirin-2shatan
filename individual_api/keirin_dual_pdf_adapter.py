@@ -1,30 +1,28 @@
-"""固定3PDFを正規化し、しょーご式5点と残差式3点を同時実行する。"""
+"""誤った3PDF実装を安全停止する一時アダプター。
+
+本来の入力はKEIRIN.JPのレース情報5PDFと2車単オッズPDFの合計6PDF。
+正しい6PDF版が復元・検証されるまで買い目を返さない。
+"""
 
 from __future__ import annotations
 
-import re
-import unicodedata
 from pathlib import Path
 from typing import Any
 
 try:
-    from .keirin_dual_strategy_api import VERSION, predict
-    from .keirin_jp_pdf_adapter import normalize_pdfs
-    from .keirin_pdf_adapter import PdfInputError, _extract_text, _input_error
+    from .keirin_dual_strategy_api import VERSION
 except ImportError:  # 直接スクリプトとして実行する場合
-    from keirin_dual_strategy_api import VERSION, predict
-    from keirin_jp_pdf_adapter import normalize_pdfs
-    from keirin_pdf_adapter import PdfInputError, _extract_text, _input_error
+    from keirin_dual_strategy_api import VERSION
 
 
-def _race_type(racecard_text: str) -> str:
-    normalized = unicodedata.normalize("NFKC", racecard_text)
-    women_markers = (
-        r"ガールズ(?:ケイリン)?",
-        r"女子競輪",
-        r"L級(?:1|2)?班?",
-    )
-    return "WOMEN" if any(re.search(pattern, normalized) for pattern in women_markers) else "MEN"
+EXPECTED_INPUTS = [
+    "KEIRIN.JP 基本情報PDF",
+    "KEIRIN.JP 直近成績PDF",
+    "KEIRIN.JP 対戦成績PDF",
+    "KEIRIN.JP 当場成績PDF",
+    "KEIRIN.JP 着度数・H・S回数PDF",
+    "KEIRIN.JP 2車単オッズPDF",
+]
 
 
 def predict_from_files(
@@ -34,41 +32,27 @@ def predict_from_files(
     ex_image: str | Path | None = None,
     lambda_value: float = 0.50,
 ) -> dict[str, Any]:
-    """同じ3PDFから2方式を分離計算し、例外を外へ出さず返す。"""
-    try:
-        payload, audit = normalize_pdfs(racecard_pdf, hs_pdf, odds_pdf, ex_image)
-        racecard_path = Path(racecard_pdf)
-        racecard_text = _extract_text(racecard_path, "racecard_pdf")
-        payload["race_type"] = _race_type(racecard_text)
-        payload["lambda_value"] = float(lambda_value)
-        audit["race_type"] = payload["race_type"]
-        audit["girls_excluded"] = True
-        result = predict(payload)
-        result["pdf_audit"] = audit
-        return result
-    except PdfInputError as exc:
-        result = _input_error(exc)
-        result["version"] = VERSION
-        return result
-    except (TypeError, ValueError) as exc:
-        return {
-            "version": VERSION,
-            "status": "INPUT_ERROR",
-            "purchase_status": "NO_BET",
-            "error": {
-                "code": "INVALID_DUAL_STRATEGY_INPUT",
-                "message": str(exc),
-                "missing": [],
-            },
-        }
-    except Exception:
-        return {
-            "version": VERSION,
-            "status": "PROCESSING_ERROR",
-            "purchase_status": "NO_BET",
-            "error": {
-                "code": "UNEXPECTED_DUAL_PDF_PROCESSING_ERROR",
-                "message": "PDF処理を安全停止しました",
-                "missing": [],
-            },
-        }
+    """正しい6PDF版が完成するまで常にNO_BETで安全停止する。"""
+    return {
+        "version": VERSION,
+        "status": "SYSTEM_SUSPENDED",
+        "purchase_status": "NO_BET",
+        "strategies": {
+            "shogo": {"purchase_status": "SUSPENDED", "candidates": []},
+            "residual": {"purchase_status": "SUSPENDED", "candidates": []},
+        },
+        "error": {
+            "code": "WRONG_INPUT_SPEC_SUSPENDED",
+            "message": (
+                "3PDF版は本来のしょーご式ではないため停止しました。"
+                "KEIRIN.JPのレース情報5PDFと2車単オッズPDFを使う6PDF版へ修正中です。"
+            ),
+            "missing": EXPECTED_INPUTS,
+        },
+        "audit": {
+            "bet_output_disabled": True,
+            "reason": "wrong_input_spec",
+            "expected_source": "KEIRIN.JP only",
+            "expected_pdf_count": 6,
+        },
+    }
