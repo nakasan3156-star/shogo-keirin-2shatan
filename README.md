@@ -42,10 +42,12 @@
 
 1. netkeirin 出走表PDF
 2. KEIRIN.JP「着度数・H・S回数」PDF
-3. netkeirin 2車単オッズPDF
+3. KEIRIN.JP 2車単オッズPDF
 4. EXデータ画像は任意
 
-3PDFの開催場・日付・レース番号を照合し、選手、H/B、並び、全2車単オッズが揃ってから計算します。空ファイル、破損PDF、別レース混在、欠損があれば `INPUT_ERROR / NO_BET` で安全停止します。
+3PDFの開催場・日付・レース番号を照合し、選手、H/B、並び、全2車単オッズが揃ってから計算します。KEIRIN.JPオッズは「○番車 全選択」の列を座標で読み、7車なら42通り、9車なら72通りが揃わない限り停止します。締切後のオッズPDFは `POST_RACE_SOURCE / NO_BET` で拒否します。
+
+空ファイル、破損PDF、別レース混在、欠損があれば `INPUT_ERROR / NO_BET` で安全停止します。
 
 ## 起動
 
@@ -63,6 +65,7 @@ docker compose -f docker-compose.individual.yml up --build
 - `strategies.residual.candidates`: 市場残差3点
 - `common_candidates`: 2方式の共通買い目
 - `dual_pair_probabilities`: 全2車単の能力・市場・残差確率とEV
+- `pdf_audit.odds_source`: `KEIRIN.JP`
 - PDF照合監査
 
 ## 回帰テスト
@@ -70,6 +73,8 @@ docker compose -f docker-compose.individual.yml up --build
 - しょーご式が5点を返す
 - 市場残差が3点を返す
 - 7車で全42通りを返す
+- KEIRIN.JPのページまたぎオッズ表を読み取る
+- 締切後のKEIRIN.JPオッズを拒否する
 - λ=0で残差理論確率が市場確率と一致
 - λ=1で残差理論確率が能力確率と一致
 - 女子競輪を拒否
