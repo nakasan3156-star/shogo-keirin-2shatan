@@ -9,20 +9,12 @@ from typing import Any
 
 try:
     from .keirin_dual_strategy_api import VERSION, predict
-    from .keirin_pdf_adapter import (
-        PdfInputError,
-        _extract_text,
-        _input_error,
-        normalize_pdfs,
-    )
+    from .keirin_jp_pdf_adapter import normalize_pdfs
+    from .keirin_pdf_adapter import PdfInputError, _extract_text, _input_error
 except ImportError:  # 直接スクリプトとして実行する場合
     from keirin_dual_strategy_api import VERSION, predict
-    from keirin_pdf_adapter import (
-        PdfInputError,
-        _extract_text,
-        _input_error,
-        normalize_pdfs,
-    )
+    from keirin_jp_pdf_adapter import normalize_pdfs
+    from keirin_pdf_adapter import PdfInputError, _extract_text, _input_error
 
 
 def _race_type(racecard_text: str) -> str:
