@@ -8,13 +8,12 @@ from typing import Any
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from individual_api.keirin_bundle_adapter import select_bundle_roles
-from individual_api.keirin_dual_pdf_adapter import predict_from_files
-from individual_api.keirin_dual_strategy_api import VERSION
+from individual_api.keirin_dual_strategy_api import VERSION, predict
 from individual_api.keirin_pdf_adapter import PdfInputError, _input_error
+from individual_api.keirin_real_pdf_adapter import normalize_real_bundle
 from .bundle_ui import INDEX_HTML
 
-app = FastAPI(title="章悟式∞競輪OS 自動判定API", version=VERSION)
+app = FastAPI(title="章悟式∞競輪OS 実PDF検証API", version=VERSION)
 
 
 def _check_pin(pin: str) -> None:
@@ -27,9 +26,10 @@ def _check_pin(pin: str) -> None:
 def health() -> dict[str, Any]:
     return {
         "status": "ok",
-        "model_status": "keirin_jp_bundle_auto_detect",
+        "model_status": "keirin_jp_real_pdf_full_parse",
         "upload_mode": "multiple_pdfs_auto_detect",
         "required_roles": ["基本情報", "着度数・H・S回数", "2車単オッズ"],
+        "selection_method": "real_full_parse",
         "extra_pdfs": "ignored",
         "strategies": {"shogo": 5, "residual": 3},
     }
@@ -61,14 +61,11 @@ async def _save_optional_image(upload: UploadFile | None, root: Path) -> Path | 
     return path
 
 
-@app.post("/analyze-bundle")
-async def analyze_bundle(
-    files: list[UploadFile] = File(...),
-    ex_image: UploadFile | None = File(default=None),
-    lambda_value: float = Form(default=0.50),
-    pin: str = Form(default=""),
+async def _run_bundle(
+    files: list[UploadFile],
+    ex_image: UploadFile | None,
+    lambda_value: float,
 ) -> JSONResponse:
-    _check_pin(pin)
     if not 0 <= lambda_value <= 1:
         raise HTTPException(400, "λは0以上1以下にしてください。")
     if len(files) < 3:
@@ -76,7 +73,7 @@ async def analyze_bundle(
     if len(files) > 20:
         raise HTTPException(400, "PDFは20枚以内にしてください。")
 
-    with tempfile.TemporaryDirectory(prefix="keirin-bundle-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="keirin-real-pdf-") as tmp:
         root = Path(tmp)
         saved: list[Path] = []
         for index, upload in enumerate(files, start=1):
@@ -86,27 +83,31 @@ async def analyze_bundle(
             saved.append(path)
         ex_path = await _save_optional_image(ex_image, root)
         try:
-            selected, bundle_audit = select_bundle_roles(saved)
+            payload, pdf_audit = normalize_real_bundle(saved, ex_path)
+            payload["race_type"] = "MEN"
+            payload["lambda_value"] = float(lambda_value)
+            result = predict(payload)
+            result["pdf_audit"] = pdf_audit
         except PdfInputError as exc:
             result = _input_error(exc)
             result["version"] = VERSION
-            return JSONResponse(status_code=422, content=result)
-
-        result = predict_from_files(
-            selected["basic"],
-            selected["hs"],
-            selected["odds"],
-            ex_path,
-            lambda_value=lambda_value,
-        )
-        result["bundle_audit"] = bundle_audit
         return JSONResponse(
             status_code=200 if result.get("status") == "OK" else 422,
             content=result,
         )
 
 
-# 旧3枠APIは外部呼び出しとの互換性のため残す。画面はanalyze-bundleを使う。
+@app.post("/analyze-bundle")
+async def analyze_bundle(
+    files: list[UploadFile] = File(...),
+    ex_image: UploadFile | None = File(default=None),
+    lambda_value: float = Form(default=0.50),
+    pin: str = Form(default=""),
+) -> JSONResponse:
+    _check_pin(pin)
+    return await _run_bundle(files, ex_image, lambda_value)
+
+
 @app.post("/analyze")
 async def analyze_legacy(
     basic_pdf: UploadFile = File(...),
@@ -117,22 +118,6 @@ async def analyze_legacy(
     pin: str = Form(default=""),
 ) -> JSONResponse:
     _check_pin(pin)
-    if not 0 <= lambda_value <= 1:
-        raise HTTPException(400, "λは0以上1以下にしてください。")
-    with tempfile.TemporaryDirectory(prefix="keirin-legacy-") as tmp:
-        root = Path(tmp)
-        paths = [root / "race_info_1.pdf", root / "race_info_2.pdf", root / "odds.pdf"]
-        for upload, path, label in zip(
-            (basic_pdf, hs_pdf, odds_pdf),
-            paths,
-            ("レース情報PDF①", "レース情報PDF②", "2車単オッズPDF"),
-        ):
-            await _save_pdf(upload, path, label)
-        ex_path = await _save_optional_image(ex_image, root)
-        result = predict_from_files(
-            paths[0], paths[1], paths[2], ex_path, lambda_value=lambda_value
-        )
-        return JSONResponse(
-            status_code=200 if result.get("status") == "OK" else 422,
-            content=result,
-        )
+    return await _run_bundle(
+        [basic_pdf, hs_pdf, odds_pdf], ex_image, lambda_value
+    )
