@@ -1,4 +1,4 @@
-"""標準ライブラリだけで動く個人評価型APIサーバー。"""
+"""標準ライブラリだけで動く2方式競輪APIサーバー。"""
 
 from __future__ import annotations
 
@@ -10,8 +10,9 @@ from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from keirin_individual_api import VERSION, predict
-from keirin_pdf_adapter import REQUIRED_UPLOADS, predict_from_files
+from keirin_dual_strategy_api import VERSION, predict
+from keirin_dual_pdf_adapter import predict_from_files
+from keirin_pdf_adapter import REQUIRED_UPLOADS
 
 
 MAX_BODY_BYTES = 50_000_000
@@ -28,7 +29,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/health":
-            self._send(200, {"status": "ok", "version": VERSION})
+            self._send(200, {
+                "status": "ok",
+                "version": VERSION,
+                "odds_source": "KEIRIN.JP",
+                "strategies": {"shogo": 5, "residual": 3},
+            })
         else:
             self._send(404, {"status": "NOT_FOUND"})
 
