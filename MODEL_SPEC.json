@@ -1,8 +1,9 @@
 {
-  "name": "章悟式∞競輪OS 個人評価型3PDF API",
-  "version": "1.1.2-individual-frozen",
-  "status": "frozen",
+  "name": "章悟式∞競輪OS しょーご式5点＋市場残差3点 API",
+  "version": "1.2.0-dual-strategy",
+  "status": "dual_strategy",
   "bet_type": "2車単",
+  "race_type": "MEN_ONLY",
   "inputs": [
     "netkeirin出走表PDF",
     "KEIRIN.JP 着度数・H・S回数PDF",
@@ -11,26 +12,30 @@
   "optional_inputs": [
     "EXデータスクリーンショット"
   ],
-  "prediction_order": [
+  "shared_prediction_order": [
     "選手個人能力",
     "役割適性",
     "ライン補正",
     "展開シナリオ",
     "10万回モンテカルロ",
-    "2車単確率",
-    "保守EV"
+    "2車単能力確率"
   ],
-  "purchase_rules": {
-    "grades": ["F1", "G3"],
-    "g1": "NO_BET",
-    "odds_min": 8.0,
-    "odds_max": 30.0,
-    "conservative_ev_min": 1.1,
-    "probability_min": 0.01,
-    "control_confidence_min": 0.38,
-    "scenario_confidence_min": 0.35,
-    "max_candidates": 2
+  "strategies": {
+    "shogo": {
+      "candidate_count": 5,
+      "ranking": "能力確率から算出した保守EV降順"
+    },
+    "residual": {
+      "candidate_count": 3,
+      "formula": "market * (ability / market) ** lambda",
+      "lambda_default": 0.5,
+      "lambda_range": [0.0, 1.0],
+      "residual_simulations": 100000,
+      "ranking": "残差補正後確率から算出した保守EV降順"
+    }
   },
+  "common_candidates_policy": "表示のみ。2方式を混ぜて再計算しない",
+  "women_policy": "WOMEN_EXCLUDED / NO_BET",
   "forbidden_prediction_inputs": [
     "Web自動取得",
     "レース結果",
