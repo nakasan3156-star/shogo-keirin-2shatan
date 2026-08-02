@@ -84,4 +84,94 @@ async def analyze(
         )
 
 
-INDEX_HTML = """<!doctype html><html lang='ja'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>章悟式∞競輪OS</title><style>body{font-family:sans-serif;background:#f3f5f7;margin:0}.w{max-width:760px;margin:auto;padding:16px}.c{background:white;padding:20px;border-radius:18px;margin:14px 0}label{display:block;font-weight:700;margin-top:16px}input{width:100%;box-sizing:border-box;padding:12px;margin-top:6px}button{width:100%;padding:16px;margin-top:20px;background:#087546;color:white;border:0;border-radius:12px;font-size:18px;font-weight:700}.err{color:#a00}pre{white-space:pre-wrap}</style></head><body><main class='w'><h1>章悟式∞競輪OS</h1><section class='c'><p><b>必要なのはKEIRIN.JPの3PDFだけ。</b></p><form id='f'><label>① 基本情報・並び予想PDF</label><input type='file' name='basic_pdf' required><label>② 着度数・H・S回数PDF</label><input type='file' name='hs_pdf' required><label>③ 2車単オッズPDF</label><input type='file' name='odds_pdf' required><label>EX画像（任意）</label><input type='file' name='ex_image'><label>残差λ</label><input type='number' name='lambda_value' min='0' max='1' step='0.05' value='0.50'><label>専用PIN</label><input type='password' name='pin'><button>しょーご式5点＋残差3点を計算</button></form><p id='m'></p><p id='e' class='err'></p></section><section id='r' class='c' hidden><pre id='o'></pre></section></main><script>const f=document.querySelector('#f'),m=document.querySelector('#m'),e=document.querySelector('#e'),r=document.querySelector('#r'),o=document.querySelector('#o');f.onsubmit=async x=>{x.preventDefault();e.textContent='';m.textContent='計算中…';r.hidden=true;try{const q=await fetch('/analyze',{method:'POST',body:new FormData(f)}),d=await q.json();if(!q.ok)throw Error(d.error?.message||'計算失敗');const a=d.strategies?.shogo?.candidates||[],b=d.strategies?.residual?.candidates||[];o.textContent='しょーご式 5点\n'+a.map(v=>v.pair.join('-')+'  EV '+v.conservative_ev.toFixed(2)).join('\n')+'\n\n残差 3点\n'+b.map(v=>v.pair.join('-')+'  EV '+v.conservative_ev.toFixed(2)).join('\n');r.hidden=false;m.textContent='完了';}catch(z){e.textContent=z.message;m.textContent='';}};</script></body></html>"""
+INDEX_HTML = """<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="theme-color" content="#07643f">
+<title>章悟式∞競輪OS</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Noto Sans JP",sans-serif;color:#17212b;background:#f3f5f7}
+*{box-sizing:border-box}body{margin:0}.wrap{max-width:760px;margin:auto;padding:14px}.card{background:#fff;border-radius:20px;padding:18px;margin:14px 0;box-shadow:0 8px 24px #17212b12}h1{font-size:26px;margin:12px 2px 16px}h2{font-size:20px;margin:0 0 12px}.lead{margin:0 0 8px;line-height:1.6}.field-title{font-weight:800;font-size:17px;margin:18px 0 8px}.file-box{display:flex;align-items:center;gap:12px;width:100%;min-height:72px;padding:12px;border:2px solid #b8c2cb;border-radius:16px;background:#fff;cursor:pointer;-webkit-tap-highlight-color:transparent}.file-box:active{background:#f2f7f4}.file-button{flex:0 0 auto;padding:12px 14px;border:1px solid #6f7a83;border-radius:9px;background:#f8f9fa;font-size:17px;font-weight:700}.file-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px;color:#394550}.file-name.empty{color:#7b8791}.native-file{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}.optional{font-size:13px;color:#6a7680;font-weight:600}.settings{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:18px}.settings label{font-weight:800;font-size:15px}.settings input{width:100%;height:52px;margin-top:7px;padding:10px 12px;border:1px solid #aeb8c2;border-radius:12px;font-size:18px}.submit{width:100%;min-height:68px;margin-top:22px;border:0;border-radius:16px;background:#087d49;color:#fff;font-size:19px;font-weight:900}.submit:disabled{opacity:.55}.status{min-height:24px;margin:16px 2px 0;font-weight:700}.error{color:#b11919;white-space:pre-wrap}.result-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.result-card{background:#fff;border-radius:18px;padding:16px}.result-card h2{font-size:19px}.pick{display:grid;grid-template-columns:70px 1fr 76px;align-items:center;gap:8px;padding:11px 0;border-bottom:1px solid #e6eaed}.pick:last-child{border-bottom:0}.pair{font-size:21px;font-weight:900}.prob{font-size:14px;color:#52606a}.ev{text-align:right;font-weight:900}.empty-result{color:#727e87;padding:12px 0}@media(max-width:600px){.wrap{padding:10px}.card{padding:16px}.file-box{min-height:78px}.file-button{font-size:16px}.settings{grid-template-columns:1fr}.result-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main class="wrap">
+<h1>章悟式∞競輪OS</h1>
+<section class="card">
+<p class="lead"><b>必要なのはKEIRIN.JPの3PDFだけ。</b><br>枠全体を押したらファイルを選べます。</p>
+<form id="form">
+<div class="field-title">① 基本情報・並び予想PDF</div>
+<label class="file-box" for="basic_pdf"><span class="file-button">ファイルを選択</span><span class="file-name empty" data-name="basic_pdf">選択されていません</span></label>
+<input class="native-file" id="basic_pdf" type="file" name="basic_pdf" accept="application/pdf" required>
+
+<div class="field-title">② 着度数・H・S回数PDF</div>
+<label class="file-box" for="hs_pdf"><span class="file-button">ファイルを選択</span><span class="file-name empty" data-name="hs_pdf">選択されていません</span></label>
+<input class="native-file" id="hs_pdf" type="file" name="hs_pdf" accept="application/pdf" required>
+
+<div class="field-title">③ 2車単オッズPDF</div>
+<label class="file-box" for="odds_pdf"><span class="file-button">ファイルを選択</span><span class="file-name empty" data-name="odds_pdf">選択されていません</span></label>
+<input class="native-file" id="odds_pdf" type="file" name="odds_pdf" accept="application/pdf" required>
+
+<div class="field-title">EX画像 <span class="optional">任意</span></div>
+<label class="file-box" for="ex_image"><span class="file-button">画像を選択</span><span class="file-name empty" data-name="ex_image">選択されていません</span></label>
+<input class="native-file" id="ex_image" type="file" name="ex_image" accept="image/png,image/jpeg,image/webp">
+
+<div class="settings">
+<label>残差λ<input type="number" name="lambda_value" min="0" max="1" step="0.05" value="0.50"></label>
+<label>専用PIN<input type="password" name="pin" autocomplete="current-password"></label>
+</div>
+<button class="submit" id="submit" type="submit">しょーご式5点＋残差3点を計算</button>
+</form>
+<p id="status" class="status"></p>
+<p id="error" class="error"></p>
+</section>
+<section id="result" class="result-grid" hidden>
+<div class="result-card"><h2>しょーご式（5点）</h2><div id="shogo"></div></div>
+<div class="result-card"><h2>市場残差（3点）</h2><div id="residual"></div></div>
+</section>
+</main>
+<script>
+const form=document.querySelector('#form');
+const statusEl=document.querySelector('#status');
+const errorEl=document.querySelector('#error');
+const resultEl=document.querySelector('#result');
+const submitEl=document.querySelector('#submit');
+for(const input of document.querySelectorAll('.native-file')){
+  input.addEventListener('change',()=>{
+    const target=document.querySelector(`[data-name="${input.name}"]`);
+    const file=input.files&&input.files[0];
+    target.textContent=file?file.name:'選択されていません';
+    target.classList.toggle('empty',!file);
+  });
+}
+function renderRows(items){
+  if(!items||!items.length)return '<div class="empty-result">候補なし</div>';
+  return items.map(v=>`<div class="pick"><div class="pair">${v.pair.join('-')}</div><div class="prob">確率 ${(Number(v.probability)*100).toFixed(1)}%<br>オッズ ${Number(v.odds).toFixed(1)}</div><div class="ev">EV<br>${Number(v.conservative_ev).toFixed(2)}</div></div>`).join('');
+}
+form.addEventListener('submit',async event=>{
+  event.preventDefault();
+  errorEl.textContent='';
+  resultEl.hidden=true;
+  submitEl.disabled=true;
+  statusEl.textContent='3PDFを解析して計算中…';
+  try{
+    const response=await fetch('/analyze',{method:'POST',body:new FormData(form)});
+    const data=await response.json();
+    if(!response.ok)throw new Error(data.error?.message||data.detail||'計算に失敗しました');
+    document.querySelector('#shogo').innerHTML=renderRows(data.strategies?.shogo?.candidates);
+    document.querySelector('#residual').innerHTML=renderRows(data.strategies?.residual?.candidates);
+    resultEl.hidden=false;
+    statusEl.textContent='計算完了';
+    resultEl.scrollIntoView({behavior:'smooth',block:'start'});
+  }catch(error){
+    errorEl.textContent=error.message;
+    statusEl.textContent='';
+  }finally{
+    submitEl.disabled=false;
+  }
+});
+</script>
+</body>
+</html>"""
