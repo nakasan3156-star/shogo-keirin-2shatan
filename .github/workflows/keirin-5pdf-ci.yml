@@ -1,4 +1,4 @@
-name: KEIRIN Bundle CI
+name: KEIRIN Real PDF CI
 
 on:
   pull_request:
@@ -25,6 +25,7 @@ jobs:
           PYTHONPATH: .:individual_api
         run: |
           pytest -q \
+            individual_api/test_keirin_real_pdf_adapter.py \
             individual_api/test_keirin_bundle_adapter.py \
             individual_api/test_keirin_jp_3pdf_adapter.py \
             individual_api/test_keirin_dual_strategy_api.py \
@@ -37,10 +38,10 @@ jobs:
           from app.main import health
           result = health()
           assert result["status"] == "ok"
-          assert result["model_status"] == "keirin_jp_bundle_auto_detect"
+          assert result["model_status"] == "keirin_jp_real_pdf_full_parse"
+          assert result["selection_method"] == "real_full_parse"
           assert result["upload_mode"] == "multiple_pdfs_auto_detect"
           assert len(result["required_roles"]) == 3
-          assert result["extra_pdfs"] == "ignored"
           assert result["strategies"]["shogo"] == 5
           assert result["strategies"]["residual"] == 3
           print(result)
