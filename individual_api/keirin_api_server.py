@@ -1,4 +1,4 @@
-"""標準ライブラリだけで動くKEIRIN.JP 5PDF・2方式APIサーバー。"""
+"""標準ライブラリだけで動くKEIRIN.JP 3PDF・2方式APIサーバー。"""
 from __future__ import annotations
 
 import json
@@ -11,7 +11,7 @@ from pathlib import Path
 
 from keirin_dual_strategy_api import VERSION, predict
 from keirin_dual_pdf_adapter import predict_from_files
-from keirin_jp_5pdf_adapter import REQUIRED_UPLOADS
+from keirin_jp_3pdf_adapter import REQUIRED_UPLOADS
 
 MAX_BODY_BYTES = 100_000_000
 
@@ -33,7 +33,7 @@ class Handler(BaseHTTPRequestHandler):
                     "status": "ok",
                     "version": VERSION,
                     "source": "KEIRIN.JP_ONLY",
-                    "required_pdf_count": 5,
+                    "required_pdf_count": 3,
                     "strategies": {"shogo": 5, "residual": 3},
                 },
             )
@@ -104,7 +104,7 @@ class Handler(BaseHTTPRequestHandler):
                 "purchase_status": "NO_BET",
                 "error": {
                     "code": "MULTIPART_REQUIRED",
-                    "message": "multipart/form-dataで5PDFを送信してください",
+                    "message": "multipart/form-dataで3PDFを送信してください",
                     "missing": list(REQUIRED_UPLOADS),
                 },
             }
@@ -142,7 +142,7 @@ class Handler(BaseHTTPRequestHandler):
                 "purchase_status": "NO_BET",
                 "error": {
                     "code": "MISSING_UPLOAD",
-                    "message": "必須5PDFが不足しています",
+                    "message": "必須3PDFが不足しています",
                     "missing": missing,
                 },
             }
@@ -157,7 +157,7 @@ class Handler(BaseHTTPRequestHandler):
                     "missing": [],
                 },
             }
-        with tempfile.TemporaryDirectory(prefix="keirin-5pdf-") as directory:
+        with tempfile.TemporaryDirectory(prefix="keirin-3pdf-") as directory:
             saved: dict[str, Path] = {}
             for name, (filename, data) in uploads.items():
                 suffix = Path(filename).suffix or (
@@ -168,8 +168,6 @@ class Handler(BaseHTTPRequestHandler):
                 saved[name] = destination
             return predict_from_files(
                 saved["basic_pdf"],
-                saved["recent_short_pdf"],
-                saved["recent_detail_pdf"],
                 saved["hs_pdf"],
                 saved["odds_pdf"],
                 saved.get("ex_image"),
@@ -182,7 +180,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def serve(host: str = "127.0.0.1", port: int = 8787) -> None:
     server = ThreadingHTTPServer((host, port), Handler)
-    print(f"Keirin 5PDF API {VERSION}: http://{host}:{port}")
+    print(f"Keirin 3PDF API {VERSION}: http://{host}:{port}")
     server.serve_forever()
 
 
