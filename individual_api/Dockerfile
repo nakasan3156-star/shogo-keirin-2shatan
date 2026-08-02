@@ -12,8 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY keirin_individual_api.py .
 COPY keirin_pdf_adapter.py .
 COPY keirin_jp_pdf_adapter.py .
-COPY keirin_jp_6pdf_adapter.py .
-COPY keirin_jp_5pdf_adapter.py .
+COPY keirin_jp_3pdf_adapter.py .
 COPY keirin_dual_strategy_api.py .
 COPY keirin_dual_pdf_adapter.py .
 COPY keirin_api_server.py .
