@@ -25,6 +25,7 @@ jobs:
           PYTHONPATH: .:individual_api
         run: |
           pytest -q \
+            individual_api/test_keirin_odds_runtime_fix.py \
             individual_api/test_keirin_real_pdf_adapter.py \
             individual_api/test_keirin_bundle_adapter.py \
             individual_api/test_keirin_jp_3pdf_adapter.py \
