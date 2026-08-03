@@ -8,19 +8,16 @@ from typing import Any
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from individual_api.keirin_dual_strategy_api import VERSION, predict
+from individual_api.keirin_ac_strategy_api import VERSION, predict
 from individual_api.keirin_odds_runtime_fix import install_odds_parser_fix
 from individual_api.keirin_pdf_adapter import PdfInputError, _input_error
 
 install_odds_parser_fix()
 
 from individual_api.keirin_real_pdf_adapter import normalize_real_bundle
-from individual_api.keirin_resilience_fix import install_resilience_fix
 from .bundle_ui import INDEX_HTML
 
-install_resilience_fix()
-
-app = FastAPI(title="章悟式∞競輪OS 実PDF検証API", version=VERSION)
+app = FastAPI(title="章悟式∞競輪OS A/C統合API", version=VERSION)
 
 
 def _check_pin(pin: str) -> None:
@@ -33,14 +30,23 @@ def _check_pin(pin: str) -> None:
 def health() -> dict[str, Any]:
     return {
         "status": "ok",
+        "version": VERSION,
+        # 既存監視との互換値。実際の稼働モデルは active_strategies を参照する。
         "model_status": "keirin_jp_resilient_pdf_parse",
         "upload_mode": "multiple_pdfs_auto_detect",
-        "required_roles": ["基本情報", "着度数・H・S回数", "2車単オッズ"],
+        "required_roles": ["出走表・基本情報", "着度数・H・S回数", "2車単オッズ"],
         "selection_method": "real_full_parse_with_safe_fallbacks",
-        "extra_pdfs": "ignored",
         "closed_odds": "allowed",
         "missing_lines": "singleton_fallback",
         "strategies": {"shogo": 5, "residual": 3},
+        "legacy_health_compatibility_only": True,
+        "active_model_status": "A_and_C_frozen",
+        "active_upload_mode": "keirin_jp_three_pdfs_auto_detect",
+        "active_selection_method": "real_full_parse_strict_same_race",
+        "active_missing_lines": "safe_stop",
+        "active_strategies": {"a": "max_3", "c": "probability_top_6"},
+        "c_simulations": 100000,
+        "residual_b": "removed_from_prediction_path",
     }
 
 
@@ -56,59 +62,44 @@ async def _save_pdf(upload: UploadFile, path: Path, label: str) -> None:
     path.write_bytes(data)
 
 
-async def _save_optional_image(upload: UploadFile | None, root: Path) -> Path | None:
-    if upload is None or not upload.filename:
-        return None
-    data = await upload.read()
-    if not data:
-        return None
-    suffix = Path(upload.filename).suffix.lower()
-    if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
-        raise HTTPException(400, "EX画像はPNG・JPG・WebPにしてください。")
-    path = root / f"ex{suffix}"
-    path.write_bytes(data)
-    return path
+async def _run_bundle(files: list[UploadFile]) -> JSONResponse:
+    if len(files) != 3:
+        raise HTTPException(400, "競輪.jpのPDFを3枚ちょうど追加してください。")
 
-
-async def _run_bundle(
-    files: list[UploadFile],
-    ex_image: UploadFile | None,
-    lambda_value: float,
-) -> JSONResponse:
-    if not 0 <= lambda_value <= 1:
-        raise HTTPException(400, "λは0以上1以下にしてください。")
-    if len(files) < 3:
-        raise HTTPException(400, "PDFを3枚以上追加してください。")
-    if len(files) > 20:
-        raise HTTPException(400, "PDFは20枚以内にしてください。")
-
-    with tempfile.TemporaryDirectory(prefix="keirin-real-pdf-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="keirin-ac-pdf-") as tmp:
         root = Path(tmp)
         saved: list[Path] = []
+        hashes: set[bytes] = set()
         for index, upload in enumerate(files, start=1):
             original = Path(upload.filename or f"file_{index}.pdf").name.replace("\x00", "")
+            data = await upload.read()
+            if not data or not data.startswith(b"%PDF"):
+                raise HTTPException(400, f"{original}は有効なPDFではありません。")
+            if data in hashes:
+                raise HTTPException(400, "同じPDFが重複しています。3種類のPDFを追加してください。")
+            hashes.add(data)
             path = root / f"{index:02d}__{original}"
-            await _save_pdf(upload, path, original)
+            path.write_bytes(data)
             saved.append(path)
-        ex_path = await _save_optional_image(ex_image, root)
+
         try:
-            payload, pdf_audit = normalize_real_bundle(saved, ex_path)
+            payload, pdf_audit = normalize_real_bundle(saved, None)
             payload["race_type"] = "MEN"
-            payload["lambda_value"] = float(lambda_value)
             result = predict(payload)
             result["pdf_audit"] = pdf_audit
         except PdfInputError as exc:
             result = _input_error(exc)
             result["version"] = VERSION
-        except Exception:
+        except Exception as exc:
             result = {
                 "version": VERSION,
                 "status": "PROCESSING_ERROR",
                 "purchase_status": "NO_BET",
                 "error": {
                     "code": "SAFE_PROCESSING_STOP",
-                    "message": "PDF解析を安全停止しました。PDFを入れ直してください。",
+                    "message": "PDF解析を安全停止しました。3PDFが同じレースか確認してください。",
                     "missing": [],
+                    "detail": type(exc).__name__,
                 },
             }
         return JSONResponse(
@@ -120,12 +111,10 @@ async def _run_bundle(
 @app.post("/analyze-bundle")
 async def analyze_bundle(
     files: list[UploadFile] = File(...),
-    ex_image: UploadFile | None = File(default=None),
-    lambda_value: float = Form(default=0.50),
     pin: str = Form(default=""),
 ) -> JSONResponse:
     _check_pin(pin)
-    return await _run_bundle(files, ex_image, lambda_value)
+    return await _run_bundle(files)
 
 
 @app.post("/analyze")
@@ -133,11 +122,7 @@ async def analyze_legacy(
     basic_pdf: UploadFile = File(...),
     hs_pdf: UploadFile = File(...),
     odds_pdf: UploadFile = File(...),
-    ex_image: UploadFile | None = File(default=None),
-    lambda_value: float = Form(default=0.50),
     pin: str = Form(default=""),
 ) -> JSONResponse:
     _check_pin(pin)
-    return await _run_bundle(
-        [basic_pdf, hs_pdf, odds_pdf], ex_image, lambda_value
-    )
+    return await _run_bundle([basic_pdf, hs_pdf, odds_pdf])
