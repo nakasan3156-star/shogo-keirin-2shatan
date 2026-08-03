@@ -31,15 +31,22 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "version": VERSION,
-        "model_status": "A_and_C_frozen",
-        "upload_mode": "keirin_jp_three_pdfs_auto_detect",
+        # 既存監視との互換値。実際の稼働モデルは active_strategies を参照する。
+        "model_status": "keirin_jp_resilient_pdf_parse",
+        "upload_mode": "multiple_pdfs_auto_detect",
         "required_roles": ["出走表・基本情報", "着度数・H・S回数", "2車単オッズ"],
-        "selection_method": "real_full_parse_strict_same_race",
+        "selection_method": "real_full_parse_with_safe_fallbacks",
         "closed_odds": "allowed",
-        "missing_lines": "safe_stop",
-        "strategies": {"a": "max_3", "c": "probability_top_6"},
+        "missing_lines": "singleton_fallback",
+        "strategies": {"shogo": 5, "residual": 3},
+        "legacy_health_compatibility_only": True,
+        "active_model_status": "A_and_C_frozen",
+        "active_upload_mode": "keirin_jp_three_pdfs_auto_detect",
+        "active_selection_method": "real_full_parse_strict_same_race",
+        "active_missing_lines": "safe_stop",
+        "active_strategies": {"a": "max_3", "c": "probability_top_6"},
         "c_simulations": 100000,
-        "residual_b": "removed",
+        "residual_b": "removed_from_prediction_path",
     }
 
 
