@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import tempfile
 from pathlib import Path
@@ -21,6 +22,8 @@ from .bundle_ui import INDEX_HTML
 install_line_parser_fix()
 
 app = FastAPI(title="章悟式∞競輪OS A/C統合API", version=VERSION)
+MAX_PDF_BYTES = 25 * 1024 * 1024
+UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 def _upload_path(root: Path, upload: UploadFile, label: str) -> Path:
@@ -80,14 +83,26 @@ async def _run_bundle(files: list[UploadFile]) -> JSONResponse:
         hashes: set[bytes] = set()
         for index, upload in enumerate(files, start=1):
             original = Path(upload.filename or f"file_{index}.pdf").name.replace("\x00", "")
-            data = await upload.read()
-            if not data or not data.startswith(b"%PDF"):
-                raise HTTPException(400, f"{original}は有効なPDFではありません。")
-            if data in hashes:
-                raise HTTPException(400, "同じPDFが重複しています。3種類のPDFを追加してください。")
-            hashes.add(data)
             path = root / f"{index:02d}__{original}"
-            path.write_bytes(data)
+            digest = hashlib.sha256()
+            total = 0
+            first_chunk = True
+            with path.open("wb") as handle:
+                while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
+                    if first_chunk and not chunk.startswith(b"%PDF"):
+                        raise HTTPException(400, f"{original}は有効なPDFではありません。")
+                    first_chunk = False
+                    total += len(chunk)
+                    if total > MAX_PDF_BYTES:
+                        raise HTTPException(413, f"{original}は25MB以下にしてください。")
+                    digest.update(chunk)
+                    handle.write(chunk)
+            if total == 0:
+                raise HTTPException(400, f"{original}は空のPDFです。")
+            fingerprint = digest.digest()
+            if fingerprint in hashes:
+                raise HTTPException(400, "同じPDFが重複しています。3種類のPDFを追加してください。")
+            hashes.add(fingerprint)
             saved.append(path)
 
         try:
@@ -98,7 +113,7 @@ async def _run_bundle(files: list[UploadFile]) -> JSONResponse:
         except PdfInputError as exc:
             result = _input_error(exc)
             result["version"] = VERSION
-        except Exception as exc:
+        except Exception:
             result = {
                 "version": VERSION,
                 "status": "PROCESSING_ERROR",
@@ -107,7 +122,6 @@ async def _run_bundle(files: list[UploadFile]) -> JSONResponse:
                     "code": "SAFE_PROCESSING_STOP",
                     "message": "PDF解析を安全停止しました。3PDFが同じレースか確認してください。",
                     "missing": [],
-                    "detail": type(exc).__name__,
                 },
             }
         return JSONResponse(
