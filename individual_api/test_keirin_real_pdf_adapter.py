@@ -1,4 +1,5 @@
 from keirin_real_pdf_adapter import parse_basic_real, parse_hs_real
+from individual_api.keirin_line_runtime_fix import _groups_from_positions, _valid
 
 
 BASIC_TEXT = '''
@@ -53,3 +54,47 @@ def test_actual_keirin_jp_layout_reads_all_hs_rows():
     assert rows[4]["H"] == 14
     assert rows[5]["S"] == 5
     assert rows[7]["second"] == 11
+
+
+def _positions(lines, intra=28.0, inter=56.0, offset=0.0, jitter=0.0):
+    found, xs = [], []
+    x = offset
+    count = 0
+    for line_index, line in enumerate(lines):
+        for member_index, bike in enumerate(line):
+            found.append(bike)
+            xs.append(x + (jitter if count % 2 else -jitter))
+            count += 1
+            if member_index < len(line) - 1:
+                x += intra
+        if line_index < len(lines) - 1:
+            x += inter
+    return found, xs
+
+
+def test_multiple_real_keirin_line_formations_and_layout_scales():
+    formations = [
+        [[1, 5], [2], [3, 9, 7], [6], [8, 4]],  # 小田原・9車・コマ切れ
+        [[2, 5], [1, 6], [7], [4, 3]],          # 武雄・四分戦
+        [[6, 4], [1, 3], [5, 2], [7]],          # 武雄・四分戦
+        [[7, 1], [3, 5], [4, 2, 6]],            # 高知・三分戦
+        [[4, 2], [3, 1], [5, 6, 7]],            # 京王閣・三分戦
+        [[1, 5, 7], [2, 4, 3, 6]],              # 和歌山・二分戦
+    ]
+    layouts = [
+        (28.0, 56.0, 0.0, 0.0),
+        (14.0, 31.0, 90.0, 0.4),
+        (36.0, 80.0, 12.0, 0.8),
+        (9.0, 22.0, 250.0, 0.2),
+    ]
+    for expected in formations:
+        for intra, inter, offset, jitter in layouts:
+            found, xs = _positions(expected, intra, inter, offset, jitter)
+            actual = _groups_from_positions(found, xs)
+            assert actual == expected
+            assert _valid(actual, sorted(found))
+
+
+def test_line_validation_rejects_duplicate_and_missing_bikes():
+    assert not _valid([[1, 2], [2, 3]], [1, 2, 3])
+    assert not _valid([[1, 2], [4]], [1, 2, 3, 4])
