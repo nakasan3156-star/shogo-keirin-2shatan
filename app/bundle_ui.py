@@ -16,5 +16,24 @@ function clearResult(){resultEl.hidden=true;decisionEl.innerHTML='';aEl.innerHTM
 function renderA(items){if(!items||!items.length)return '<div class="empty">条件一致なし・見送り</div>';return items.map(v=>`<div class="pick"><div class="pair">${v.pair.join('-')}</div><div class="prob">人気 ${v.popularity_rank}位<br>オッズ ${Number(v.odds).toFixed(1)}</div><div class="ev">A</div></div>`).join('');}
 function renderC(items){if(!items||!items.length)return '<div class="empty">順位データなし</div>';return items.map(v=>`<div class="pick"><div class="pair">${v.pair.join('-')}</div><div class="prob">予測確率 ${(Number(v.probability)*100).toFixed(2)}%<br>オッズ ${Number(v.odds).toFixed(1)}</div><div class="ev">EV<br>${Number(v.ev).toFixed(2)}<br>${v.purchase_label}</div></div>`).join('');}
 function renderDecision(data){const a=data.strategies?.a?.candidates||[],c=data.strategies?.c?.purchase_candidates||[];if(a.length||c.length){const rows=[];if(a.length)rows.push(`A方式：${a.map(v=>v.pair.join('-')).join('・')}`);if(c.length)rows.push(`C方式：${c.map(v=>v.pair.join('-')).join('・')}`);return `<div class="notice">購入候補<br>${rows.join('<br>')}</div>`;}return '<div class="notice">見送り<br>A方式・C方式とも購入条件を満たしていません。</div>';}
-form.addEventListener('submit',async e=>{e.preventDefault();errorEl.textContent='';clearResult();if(files.length!==3){errorEl.textContent='競輪.jpのPDFを3枚ちょうど追加してください。';return;}submitEl.disabled=true;statusEl.textContent='3PDFを判定して10万回計算中…';try{const response=await fetch('/analyze-bundle',{method:'POST',body:new FormData(form)});const data=await response.json();if(!response.ok)throw new Error(data.error?.message||data.detail||'計算に失敗しました');decisionEl.innerHTML=renderDecision(data);aEl.innerHTML=renderA(data.strategies?.a?.candidates);cEl.innerHTML=renderC(data.strategies?.c?.candidates);resultEl.hidden=false;statusEl.textContent='計算完了';resultEl.scrollIntoView({behavior:'smooth',block:'start'});}catch(err){clearResult();statusEl.textContent='';errorEl.textContent=err.message;}finally{submitEl.disabled=false;}});
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+async function requestCalculation(){
+  for(let attempt=0;attempt<2;attempt++){
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),120000);
+    try{
+      const response=await fetch('/analyze-bundle',{method:'POST',body:new FormData(form),signal:controller.signal});
+      const raw=await response.text();let data;
+      try{data=JSON.parse(raw);}catch(_){data=null;}
+      if([502,503,504].includes(response.status)&&attempt===0){statusEl.textContent='サーバー起動待ちです。自動でもう一度試しています…';await sleep(3000);continue;}
+      if(!data)throw new Error('サーバー応答を確認できません。少し待ってからもう一度計算してください。');
+      if(!response.ok)throw new Error(data.error?.message||data.detail||'PDFを確認してもう一度計算してください。');
+      return data;
+    }catch(err){
+      if(err?.name==='AbortError')throw new Error('計算が混み合っています。少し待ってからもう一度計算してください。');
+      throw err;
+    }finally{clearTimeout(timer);}
+  }
+  throw new Error('サーバーを起動できませんでした。少し待ってからもう一度計算してください。');
+}
+form.addEventListener('submit',async e=>{e.preventDefault();errorEl.textContent='';clearResult();if(files.length!==3){errorEl.textContent='競輪.jpのPDFを3枚ちょうど追加してください。';return;}submitEl.disabled=true;statusEl.textContent='3PDFを判定して10万回計算中…';try{const data=await requestCalculation();decisionEl.innerHTML=renderDecision(data);aEl.innerHTML=renderA(data.strategies?.a?.candidates);cEl.innerHTML=renderC(data.strategies?.c?.candidates);resultEl.hidden=false;statusEl.textContent='計算完了';resultEl.scrollIntoView({behavior:'smooth',block:'start'});}catch(err){clearResult();statusEl.textContent='';errorEl.textContent=err?.message||'計算に失敗しました。少し待ってからもう一度お試しください。';}finally{submitEl.disabled=false;}});
 </script></body></html>"""
