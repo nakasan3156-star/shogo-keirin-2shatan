@@ -55,10 +55,12 @@ def health() -> dict[str, Any]:
         "active_line_parser": "adaptive_coordinate_and_text",
         "active_strategies": {
             "a": "purchase_filter_max_3",
-            "c": "validated_ranking_top_6_reference_only",
+            "c": "individual_line_scenario_mc100k_then_ev_purchase",
         },
         "c_simulations": 100000,
-        "c_ev_purchase": "disabled_not_validated",
+        "c_seed": 3156,
+        "c_ev_formula": "probability_times_odds",
+        "c_ev_purchase": "enabled_3_to_5_or_no_bet",
         "residual_b": "removed_from_prediction_path",
     }
 
