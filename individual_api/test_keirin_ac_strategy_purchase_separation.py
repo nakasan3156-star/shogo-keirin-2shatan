@@ -18,8 +18,22 @@ from keirin_ac_strategy_api import (
 from test_keirin_dual_strategy_api import PAYLOAD
 
 
+def _complete_rider_fields(payload):
+    """AC方式が必要とする実PDF相当の全項目を旧共通fixtureへ補う。"""
+    completed = deepcopy(payload)
+    for index, rider in enumerate(completed["riders"], start=1):
+        rider.update({
+            "quinella_rate": min(100.0, float(rider["win_rate"]) + 20.0),
+            "first": index + 1,
+            "second": index + 2,
+            "third": index + 3,
+            "out": index + 8,
+        })
+    return completed
+
+
 def test_c_ev_is_applied_only_after_probability_and_can_purchase() -> None:
-    result = predict(deepcopy(PAYLOAD))
+    result = predict(_complete_rider_fields(PAYLOAD))
     c = result["strategies"]["c"]
 
     assert c["simulations"] == N_SIMULATIONS == 100_000
@@ -43,7 +57,7 @@ def test_c_ev_is_applied_only_after_probability_and_can_purchase() -> None:
 
 
 def test_top_level_candidates_include_separated_a_and_c_purchase_candidates() -> None:
-    result = predict(deepcopy(PAYLOAD))
+    result = predict(_complete_rider_fields(PAYLOAD))
     by_strategy = result["purchase_candidates_by_strategy"]
     assert by_strategy["a"] == result["strategies"]["a"]["candidates"]
     assert by_strategy["c"] == result["strategies"]["c"]["purchase_candidates"]
