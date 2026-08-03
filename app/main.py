@@ -9,6 +9,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from individual_api.keirin_ac_strategy_api import VERSION, predict
+from individual_api.keirin_line_runtime_fix import install_line_parser_fix
 from individual_api.keirin_odds_runtime_fix import install_odds_parser_fix
 from individual_api.keirin_pdf_adapter import PdfInputError, _input_error
 
@@ -16,6 +17,8 @@ install_odds_parser_fix()
 
 from individual_api.keirin_real_pdf_adapter import normalize_real_bundle
 from .bundle_ui import INDEX_HTML
+
+install_line_parser_fix()
 
 app = FastAPI(title="章悟式∞競輪OS A/C統合API", version=VERSION)
 
@@ -31,19 +34,18 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "version": VERSION,
-        # 既存監視との互換値。実際の稼働モデルは active_strategies を参照する。
         "model_status": "keirin_jp_resilient_pdf_parse",
         "upload_mode": "multiple_pdfs_auto_detect",
         "required_roles": ["出走表・基本情報", "着度数・H・S回数", "2車単オッズ"],
         "selection_method": "real_full_parse_with_safe_fallbacks",
         "closed_odds": "allowed",
-        "missing_lines": "singleton_fallback",
+        "missing_lines": "resilient_coordinate_and_text_parse",
         "strategies": {"shogo": 5, "residual": 3},
         "legacy_health_compatibility_only": True,
         "active_model_status": "A_and_C_frozen",
         "active_upload_mode": "keirin_jp_three_pdfs_auto_detect",
         "active_selection_method": "real_full_parse_strict_same_race",
-        "active_missing_lines": "safe_stop",
+        "active_missing_lines": "safe_stop_after_resilient_retry",
         "active_strategies": {"a": "max_3", "c": "probability_top_6"},
         "c_simulations": 100000,
         "residual_b": "removed_from_prediction_path",
@@ -53,13 +55,6 @@ def health() -> dict[str, Any]:
 @app.get("/", response_class=HTMLResponse)
 def home() -> str:
     return INDEX_HTML
-
-
-async def _save_pdf(upload: UploadFile, path: Path, label: str) -> None:
-    data = await upload.read()
-    if not data or not data.startswith(b"%PDF"):
-        raise HTTPException(400, f"{label}は有効なPDFではありません。")
-    path.write_bytes(data)
 
 
 async def _run_bundle(files: list[UploadFile]) -> JSONResponse:
