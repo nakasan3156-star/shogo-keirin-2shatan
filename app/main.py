@@ -23,6 +23,12 @@ install_line_parser_fix()
 app = FastAPI(title="章悟式∞競輪OS A/C統合API", version=VERSION)
 
 
+def _upload_path(root: Path, upload: UploadFile, label: str) -> Path:
+    """Preserve identity-bearing filenames while stripping client directories."""
+    original = Path(upload.filename or f"{label}.pdf").name.replace("\x00", "")
+    return root / f"{label}__{original}"
+
+
 def _check_pin(pin: str) -> None:
     required = os.getenv("SHOGO_ACCESS_PIN", "").strip()
     if required and pin != required:

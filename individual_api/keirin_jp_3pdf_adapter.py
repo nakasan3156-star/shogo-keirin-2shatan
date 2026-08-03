@@ -273,7 +273,14 @@ def normalize_three_pdfs(
     for rider in riders:
         rider.update(hs[int(rider["bike"])])
 
-    lines = _parse_lines(basic_path, bikes)
+    try:
+        from .keirin_line_runtime_fix import parse_lines_from_pdfs
+    except ImportError:
+        from keirin_line_runtime_fix import parse_lines_from_pdfs
+
+    lines, line_source, line_method = parse_lines_from_pdfs(
+        [basic_path, hs_path, paths["odds_pdf"]], bikes
+    )
     odds = _parse_keirin_jp_odds_pdf(paths["odds_pdf"], texts["odds_pdf"], bikes)
     race_number = int(identity["race"])
     payload = {
@@ -301,6 +308,8 @@ def normalize_three_pdfs(
         "rider_count": len(riders),
         "odds_count": len(bikes) * (len(bikes) - 1),
         "lines": lines,
+        "line_source": line_source,
+        "line_method": line_method,
         "pre_race_status": {
             "basic_pdf": _pre_race_status(basic_text, race_number, "basic_pdf"),
             "hs_pdf": _pre_race_status(hs_text, race_number, "hs_pdf"),

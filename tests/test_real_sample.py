@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from app.engine import predict
 from app.parser import (
     DOCUMENT_BASIC,
@@ -28,12 +30,21 @@ KOCHI3_RECENT = UPLOAD / "高知競輪 サマーナイトフェスティバル G
 KOCHI3_ODDS = UPLOAD / "高知競輪 サマーナイトフェスティバル GII 2026年07月19日 3R 一　般 オッズ _ 競輪レース情報 - netkeirin（ネットケイリン）.PDF"
 
 
+def requires_external_pdfs(*paths: Path):
+    return pytest.mark.skipif(
+        not all(path.is_file() for path in paths),
+        reason="legacy external PDF fixture is not present in this checkout",
+    )
+
+
+@requires_external_pdfs(YAHIKO_ENTRY, YAHIKO_ODDS, SHIZUOKA_RECENT)
 def test_content_classification():
     assert classify_pdf(YAHIKO_ENTRY) == DOCUMENT_BASIC
     assert classify_pdf(YAHIKO_ODDS) == DOCUMENT_ODDS
     assert classify_pdf(SHIZUOKA_RECENT) == DOCUMENT_RECENT
 
 
+@requires_external_pdfs(YAHIKO_ENTRY, YAHIKO_ODDS, KOCHI_ENTRY, KOCHI_ODDS)
 def test_real_seven_and_nine_rider_fields():
     cases = [
         (YAHIKO_ENTRY, YAHIKO_ODDS, 7, 42, ((1, 7), (3, 4), (5, 2), (6,))),
@@ -47,6 +58,7 @@ def test_real_seven_and_nine_rider_fields():
         assert race.lines == expected_lines
 
 
+@requires_external_pdfs(SHIZUOKA_RECENT)
 def test_recent_pdf_extracts_all_seven_riders():
     names = ["小川三士郎", "菅原大也", "纐纈洸翔", "黒沢征治", "滝本幸正", "新村穣", "中井俊亮"]
     riders = tuple(
@@ -71,6 +83,7 @@ def test_recent_pdf_extracts_all_seven_riders():
     assert all(recent["riders"][number]["finishes"] for number in range(1, 8))
 
 
+@requires_external_pdfs(YAHIKO_ENTRY, YAHIKO_ODDS, KOCHI_ENTRY, KOCHI_ODDS)
 def test_real_monte_carlo_is_complete_and_reproducible():
     for entry, odds_path, expected in ((YAHIKO_ENTRY, YAHIKO_ODDS, 42), (KOCHI_ENTRY, KOCHI_ODDS, 72)):
         race = parse_entry_pdf(entry)
@@ -141,6 +154,7 @@ def test_missing_rider_name_does_not_abort_valid_statistics(monkeypatch, tmp_pat
     assert any("成績数値のみで計算" in warning for warning in race.line_warnings)
 
 
+@requires_external_pdfs(KOCHI3_ENTRY, KOCHI3_RECENT, KOCHI3_ODDS)
 def test_same_race_three_pdf_pipeline_is_complete_and_reproducible():
     assert classify_pdf(KOCHI3_ENTRY) == DOCUMENT_BASIC
     assert classify_pdf(KOCHI3_RECENT) == DOCUMENT_RECENT

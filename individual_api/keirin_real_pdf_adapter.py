@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 import unicodedata
 from pathlib import Path
@@ -50,7 +51,11 @@ _HS_VALUES = re.compile(
 
 
 def _norm(text: str) -> str:
-    return unicodedata.normalize("NFKC", text).replace("\u00a0", " ")
+    return (
+        unicodedata.normalize("NFKC", text)
+        .replace("\u00a0", " ")
+        .translate(str.maketrans({"⻑": "長", "⻘": "青"}))
+    )
 
 
 def _clean_name(value: str) -> str:
@@ -102,7 +107,101 @@ def _profile_rows(text: str) -> list[tuple[int, str, str, str, str]]:
     return rows
 
 
-def parse_basic_real(text: str) -> list[dict[str, Any]]:
+def _coordinate_profile_rows(path: Path, value_kind: str) -> list[tuple[int, str, str, str, list[str]]]:
+    """Read rider table rows by columns when pdftotext breaks narrow 9-rider rows."""
+    try:
+        logging.getLogger("pdfminer").setLevel(logging.ERROR)
+        import pdfplumber
+    except Exception:
+        return []
+
+    rows: dict[int, tuple[int, str, str, str, list[str]]] = {}
+    try:
+        with pdfplumber.open(path) as document:
+            for page in document.pages:
+                words = page.extract_words(x_tolerance=1.5, y_tolerance=2)
+                anchors = []
+                if value_kind == "basic":
+                    anchors = [
+                        word for word in words
+                        if re.fullmatch(r"[0-9]{2,3}\.[0-9]{1,2}", _norm(str(word.get("text", ""))))
+                    ]
+                else:
+                    # H/S rows have six integer columns to the right of the rider profile.
+                    top_values: dict[float, list[dict]] = {}
+                    for word in words:
+                        value = _norm(str(word.get("text", "")))
+                        if float(word.get("x0", 0.0)) > float(page.width) * 0.40 and re.fullmatch(r"\d{1,3}", value):
+                            key = round(float(word["top"]), 1)
+                            top_values.setdefault(key, []).append(word)
+                    anchors = [
+                        min(group, key=lambda word: float(word["x0"]))
+                        for group in top_values.values()
+                        if len(group) >= 6
+                    ]
+
+                for anchor in anchors:
+                    row_top = float(anchor["top"])
+                    right_numbers = [
+                        word for word in words
+                        if abs(float(word["top"]) - row_top) <= 2.5
+                        and float(word["x0"]) >= float(page.width) * 0.40
+                        and re.fullmatch(
+                            r"[0-9]{2,3}\.[0-9]{1,2}|\d{1,3}",
+                            _norm(str(word.get("text", ""))),
+                        )
+                    ]
+                    right_numbers.sort(key=lambda word: float(word["x0"]))
+                    values = [_norm(str(word["text"])) for word in right_numbers]
+                    if value_kind == "basic":
+                        if len(values) != 6 or not re.fullmatch(r"[0-9]{2,3}\.[0-9]{1,2}", values[0]):
+                            continue
+                    elif len(values) != 6 or any(not re.fullmatch(r"\d{1,3}", value) for value in values):
+                        continue
+
+                    bike_words = [
+                        word for word in words
+                        if abs(float(word["top"]) - row_top) <= 2.5
+                        and float(word["x0"]) < float(page.width) * 0.20
+                        and re.fullmatch(r"[1-9]", _norm(str(word.get("text", ""))))
+                    ]
+                    if not bike_words:
+                        continue
+                    # The frame number is left of the bike number when both exist.
+                    bike = int(_norm(str(max(bike_words, key=lambda word: float(word["x0"]))["text"])))
+
+                    name_words = [
+                        word for word in words
+                        if float(page.width) * 0.11 <= float(word["x0"]) < float(page.width) * 0.43
+                        and row_top - 13.0 <= float(word["top"]) <= row_top - 2.0
+                        and not re.fullmatch(r"\d+", _norm(str(word.get("text", ""))))
+                    ]
+                    name_words.sort(key=lambda word: (float(word["top"]), float(word["x0"])))
+                    if not name_words:
+                        continue
+                    name_top = min(float(word["top"]) for word in name_words)
+                    name = _clean_name("".join(
+                        _norm(str(word["text"])) for word in name_words
+                        if abs(float(word["top"]) - name_top) <= 2.5
+                    ))
+
+                    profile_words = [
+                        word for word in words
+                        if float(page.width) * 0.11 <= float(word["x0"]) < float(page.width) * 0.43
+                        and row_top + 2.0 <= float(word["top"]) <= row_top + 19.0
+                    ]
+                    profile_words.sort(key=lambda word: (float(word["top"]), float(word["x0"])))
+                    profile = re.sub(r"\s+", "", "".join(_norm(str(word["text"])) for word in profile_words))
+                    profile_match = re.search(r"([^/]+)/((?:[ASL]\d){1,2})/(逃|追|両)", profile)
+                    if not name or not profile_match:
+                        continue
+                    rows[bike] = (bike, name, profile_match.group(1), profile_match.group(3), values)
+    except Exception:
+        return []
+    return [rows[bike] for bike in sorted(rows)]
+
+
+def parse_basic_real(text: str, path: str | Path | None = None) -> list[dict[str, Any]]:
     riders: dict[int, dict[str, Any]] = {}
     for bike, name, raw_prefecture, style, values in _profile_rows(text):
         match = _BASIC_VALUES.match(values)
@@ -124,6 +223,24 @@ def parse_basic_real(text: str) -> list[dict[str, Any]]:
             "mark": int(mark),
             "B": int(back),
         }
+    if path is not None:
+        for bike, name, raw_prefecture, style, values in _coordinate_profile_rows(Path(path), "basic"):
+            score, escape, makuri, sashi, mark, back = values
+            prefecture_raw = re.sub(r"\s+", "", raw_prefecture)
+            prefecture = _normalize_prefecture(prefecture_raw)
+            riders[bike] = {
+                "bike": bike,
+                "name": name,
+                "region": PREFECTURE_TO_REGION.get(prefecture, "未取得") if prefecture else "未取得",
+                "prefecture_raw": prefecture_raw or "未取得",
+                "style": style,
+                "score": float(score),
+                "escape": int(escape),
+                "makuri": int(makuri),
+                "sashi": int(sashi),
+                "mark": int(mark),
+                "B": int(back),
+            }
     result = [riders[bike] for bike in sorted(riders)]
     if len(result) not in _VALID_COUNTS:
         raise PdfInputError(
@@ -135,7 +252,9 @@ def parse_basic_real(text: str) -> list[dict[str, Any]]:
     return result
 
 
-def parse_hs_real(text: str, bikes: list[int]) -> dict[int, dict[str, int | float]]:
+def parse_hs_real(
+    text: str, bikes: list[int], path: str | Path | None = None
+) -> dict[int, dict[str, int | float]]:
     rows: dict[int, dict[str, int | float]] = {}
     for bike, _name, _prefecture, _style, values in _profile_rows(text):
         match = _HS_VALUES.match(values)
@@ -153,6 +272,20 @@ def parse_hs_real(text: str, bikes: list[int]) -> dict[int, dict[str, int | floa
             "win_rate": 100.0 * first / total if total else 0.0,
             "quinella_rate": 100.0 * (first + second) / total if total else 0.0,
         }
+    if path is not None:
+        for bike, _name, _prefecture, _style, values in _coordinate_profile_rows(Path(path), "hs"):
+            first, second, third, out, h_count, s_count = map(int, values)
+            total = first + second + third + out
+            rows[bike] = {
+                "first": first,
+                "second": second,
+                "third": third,
+                "out": out,
+                "H": h_count,
+                "S": s_count,
+                "win_rate": 100.0 * first / total if total else 0.0,
+                "quinella_rate": 100.0 * (first + second) / total if total else 0.0,
+            }
     if set(rows) != set(bikes):
         raise PdfInputError(
             "REAL_HS_PARSE_FAILED",
@@ -197,7 +330,7 @@ def normalize_real_bundle(
     basic_candidates: list[dict[str, Any]] = []
     for document in documents:
         try:
-            riders = parse_basic_real(document["text"])
+            riders = parse_basic_real(document["text"], document["path"])
         except PdfInputError:
             continue
         basic_candidates.append({"document": document, "riders": riders})
@@ -222,7 +355,7 @@ def normalize_real_bundle(
             if hs_doc["path"] == basic["path"] or not _same_race((basic, hs_doc)):
                 continue
             try:
-                hs_rows = parse_hs_real(hs_doc["text"], bikes)
+                hs_rows = parse_hs_real(hs_doc["text"], bikes, hs_doc["path"])
             except PdfInputError:
                 continue
             saw_hs = True
@@ -281,7 +414,14 @@ def normalize_real_bundle(
     basic_text = best["basic"]["text"]
     identity = best["basic"]["identity"]
     race_number = int(identity["race"])
-    lines = _parse_lines(basic_path, bikes)
+    try:
+        from .keirin_line_runtime_fix import parse_lines_from_pdfs
+    except ImportError:
+        from keirin_line_runtime_fix import parse_lines_from_pdfs
+
+    lines, line_source, line_method = parse_lines_from_pdfs(
+        [basic_path, hs_path, odds_path], bikes
+    )
 
     payload = {
         "grade": _grade(basic_text),
@@ -308,6 +448,8 @@ def normalize_real_bundle(
         "rider_count": len(riders),
         "odds_count": len(bikes) * (len(bikes) - 1),
         "lines": lines,
+        "line_source": line_source,
+        "line_method": line_method,
         "pre_race_status": {
             "basic_pdf": _pre_race_status(basic_text, race_number, "basic_pdf"),
             "hs_pdf": _pre_race_status(best["hs"]["text"], race_number, "hs_pdf"),
