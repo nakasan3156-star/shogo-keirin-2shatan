@@ -18,6 +18,12 @@ C_MAX_ODDS = 30.0
 C_MIN_EV = 1.00
 C_MIN_PURCHASE_CANDIDATES = 3
 C_MAX_PURCHASE_CANDIDATES = 5
+REQUIRED_RIDER_FIELDS = {
+    "bike", "name", "score", "win_rate", "quinella_rate",
+    "first", "second", "third", "out",
+    "escape", "makuri", "sashi", "mark", "H", "B",
+}
+NUMERIC_RIDER_FIELDS = REQUIRED_RIDER_FIELDS - {"bike", "name"}
 
 
 def _error(code: str, message: str, missing: list[str] | None = None) -> dict[str, Any]:
@@ -54,17 +60,57 @@ def _validate(payload: Any) -> dict[str, Any] | None:
     if str(payload.get("race_type", "MEN")).upper() != "MEN":
         return _error("WOMEN_EXCLUDED", "女子競輪は対象外です")
     riders = payload.get("riders")
-    if not isinstance(riders, list) or len(riders) < 5:
-        return _error("INVALID_RIDERS", "選手データを5人以上取得できません")
+    if not isinstance(riders, list) or not 5 <= len(riders) <= 9:
+        return _error("INVALID_RIDERS", "選手データは5〜9人必要です")
+    bikes: list[int] = []
+    missing: list[str] = []
+    for rider_index, rider in enumerate(riders):
+        if not isinstance(rider, dict):
+            return _error("INVALID_RIDER", f"選手{rider_index + 1}のデータ形式が不正です")
+        rider_missing = REQUIRED_RIDER_FIELDS - set(rider)
+        for field in sorted(rider_missing):
+            missing.append(f"riders[{rider_index}].{field}")
+        if rider_missing:
+            continue
+        try:
+            raw_bike = rider["bike"]
+            bike = int(raw_bike)
+            valid_bike = not isinstance(raw_bike, bool) and float(raw_bike) == bike and bike > 0
+        except (TypeError, ValueError, OverflowError):
+            valid_bike = False
+            bike = 0
+        if not valid_bike:
+            return _error("INVALID_BIKE", f"選手{rider_index + 1}の車番が不正です")
+        if not isinstance(rider["name"], str) or not rider["name"].strip():
+            return _error("INVALID_RIDER_NAME", f"{bike}番車の選手名を取得できません")
+        for field in sorted(NUMERIC_RIDER_FIELDS):
+            try:
+                value = float(rider[field])
+            except (TypeError, ValueError, OverflowError):
+                return _error("INVALID_RIDER_VALUE", f"{bike}番車の{field}が数値ではありません")
+            if not np.isfinite(value) or value < 0:
+                return _error("INVALID_RIDER_VALUE", f"{bike}番車の{field}が不正です")
+            if field in {"win_rate", "quinella_rate"} and value > 100:
+                return _error("INVALID_RIDER_VALUE", f"{bike}番車の{field}が100%を超えています")
+        if float(rider["score"]) <= 0:
+            return _error("INVALID_RIDER_VALUE", f"{bike}番車の競走得点を取得できません")
+        if sum(float(rider[field]) for field in ("first", "second", "third", "out")) <= 0:
+            return _error("INVALID_RIDER_VALUE", f"{bike}番車の着度数を取得できません")
+        bikes.append(bike)
+    if missing:
+        return _error("MISSING_RIDER_DATA", "選手データに不足があります", missing)
+    if len(set(bikes)) != len(bikes):
+        return _error("DUPLICATE_BIKE", "車番が重複しています")
+    if sorted(bikes) != list(range(1, len(bikes) + 1)):
+        return _error("INVALID_BIKES", "車番に欠落または範囲外があります")
     lines = payload.get("lines")
-    if not isinstance(lines, list) or not lines:
+    if not isinstance(lines, list) or not lines or any(not isinstance(line, list) or not line for line in lines):
         return _error("LINES_NOT_FOUND", "ライン構成を取得できません")
-    bikes = sorted(int(r["bike"]) for r in riders)
     try:
         flat = [int(b) for line in lines for b in line]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return _error("INVALID_LINES", "ライン構成が不正です")
-    if sorted(flat) != bikes or len(flat) != len(set(flat)):
+    if sorted(flat) != sorted(bikes) or len(flat) != len(set(flat)):
         return _error("INVALID_LINES", "全選手がライン構成に一度ずつ必要です")
     if len(lines) == len(bikes) and all(len(line) == 1 for line in lines):
         return _error("LINES_NOT_FOUND", "ライン未取得のため安全停止しました")
@@ -77,11 +123,14 @@ def _validate(payload: Any) -> dict[str, Any] | None:
             if i == j:
                 continue
             try:
-                valid = odds[i][j] is not None and float(odds[i][j]) > 0
-            except (TypeError, ValueError):
+                value = float(odds[i][j])
+                valid = odds[i][j] is not None and np.isfinite(value) and value > 0
+            except (TypeError, ValueError, OverflowError):
                 valid = False
             if not valid:
                 return _error("MISSING_ODDS", "2車単オッズ42通りを取得できません", [f"odds[{i}][{j}]"])
+            if value >= 9999.9:
+                return _error("PLACEHOLDER_ODDS", "2車単オッズに未確定値があります", [f"odds[{i}][{j}]"])
     return None
 
 
@@ -128,7 +177,7 @@ def _c_strategy(payload: dict[str, Any], riders: list[dict[str, Any]], lines: li
     n = len(riders)
 
     def arr(field: str) -> np.ndarray:
-        return np.asarray([float(r.get(field, 0.0)) for r in riders], dtype=float)
+        return np.asarray([float(r[field]) for r in riders], dtype=float)
 
     score = _minmax(arr("score"))
     win = _minmax(arr("win_rate"))
@@ -234,6 +283,8 @@ def _c_strategy(payload: dict[str, Any], riders: list[dict[str, Any]], lines: li
     counts = np.zeros((n, n), dtype=np.int64)
     np.add.at(counts, (first_idx, second_idx), 1)
     probability = counts / float(N_SIMULATIONS)
+    if not np.isfinite(probability).all() or not np.isclose(float(probability.sum()), 1.0, atol=1e-12):
+        raise RuntimeError("invalid probability distribution")
 
     all_pairs: list[dict[str, Any]] = []
     for i, first_bike in enumerate(bikes):
@@ -324,7 +375,7 @@ def _c_strategy(payload: dict[str, Any], riders: list[dict[str, Any]], lines: li
     }
 
 
-def predict(payload: Any) -> dict[str, Any]:
+def _predict_strict(payload: Any) -> dict[str, Any]:
     validation = _validate(payload)
     if validation:
         return validation
@@ -370,3 +421,20 @@ def predict(payload: Any) -> dict[str, Any]:
             "c_odds_applied_after_probability": True,
         },
     }
+
+
+def predict(payload: Any) -> dict[str, Any]:
+    """例外を外へ出さず、正常結果または安全なNO_BETを必ず返す。"""
+    try:
+        return _predict_strict(payload)
+    except Exception:
+        return {
+            "version": VERSION,
+            "status": "PROCESSING_ERROR",
+            "purchase_status": "NO_BET",
+            "error": {
+                "code": "SAFE_PROCESSING_STOP",
+                "message": "予測処理を安全停止しました。3PDFの内容を確認してください。",
+                "missing": [],
+            },
+        }
