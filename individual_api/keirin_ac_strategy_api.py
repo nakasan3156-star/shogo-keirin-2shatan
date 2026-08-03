@@ -8,8 +8,11 @@ from typing import Any
 
 import numpy as np
 
-VERSION = "2.0.0-ac-frozen"
+VERSION = "2.1.0-ac-ranking-separated"
 N_SIMULATIONS = 100_000
+C_VALIDATION_RACES = 876
+C_TOP6_HITS = 486
+C_TOP6_HIT_RATE = C_TOP6_HITS / C_VALIDATION_RACES
 
 
 def _error(code: str, message: str, missing: list[str] | None = None) -> dict[str, Any]:
@@ -244,7 +247,6 @@ def _c_strategy(payload: dict[str, Any], riders: list[dict[str, Any]], lines: li
                 "pair": [first_bike, second_bike],
                 "probability": p,
                 "odds": odd,
-                "ev": p * odd,
                 "strategy": "C",
             })
     all_pairs.sort(key=lambda item: (-item["probability"], item["pair"]))
@@ -265,7 +267,13 @@ def _c_strategy(payload: dict[str, Any], riders: list[dict[str, Any]], lines: li
         "name": "C方式 Ver.1.0 Frozen",
         "selection_rule": "個人能力→展開分岐→固定シード10万回MC→予測確率上位6点",
         "candidate_count": 6,
-        "purchase_status": "SIX_PICKS",
+        "purchase_status": "REFERENCE_ONLY",
+        "purchase_candidates": [],
+        "validation_scope": "RANKING_ONLY",
+        "validation_races": C_VALIDATION_RACES,
+        "validated_top6_hits": C_TOP6_HITS,
+        "validated_top6_hit_rate": C_TOP6_HIT_RATE,
+        "ev_validated": False,
         "simulations": N_SIMULATIONS,
         "seed": seed,
         "control_probabilities": [
@@ -293,9 +301,10 @@ def predict(payload: Any) -> dict[str, Any]:
         "version": VERSION,
         "status": "OK",
         "race_type": "MEN",
-        "purchase_status": "A_AND_C_READY",
+        "purchase_status": "A_BET" if a_result["candidates"] else "NO_BET",
         "strategies": {"a": a_result, "c": c_result},
-        "candidates": c_result["candidates"],
+        # Top-level candidates are purchase candidates. C is ranking reference only.
+        "candidates": a_result["candidates"],
         "common_candidates": [list(pair) for pair in sorted(a_pairs & c_pairs)],
         "audit": {
             "engines_separated": True,
@@ -304,5 +313,7 @@ def predict(payload: Any) -> dict[str, Any]:
             "odds_used_in_a_filter": True,
             "odds_used_in_c_probability": False,
             "c_simulations": N_SIMULATIONS,
+            "c_validation_scope": "RANKING_ONLY",
+            "c_ev_used_for_purchase": False,
         },
     }
