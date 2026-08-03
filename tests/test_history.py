@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from app.history import extract_race_id_from_pdf, score_lost_strong
 
 
@@ -7,6 +9,10 @@ WORKSPACE = Path(__file__).resolve().parents[3]
 ENTRY = WORKSPACE / "upload" / "奈良競輪 前検日コメならウィンチケット杯 FII 2026年07月18日 9R 決　勝 出走表 _ 競輪レース情報 - netkeirin（ネットケイリン）.PDF"
 
 
+@pytest.mark.skipif(
+    not ENTRY.is_file(),
+    reason="legacy external PDF fixture is not present in this checkout",
+)
 def test_extract_target_race_id_from_real_pdf_annotations():
     assert extract_race_id_from_pdf(ENTRY, 9) == "202607185309"
 

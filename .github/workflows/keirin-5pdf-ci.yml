@@ -23,15 +23,7 @@ jobs:
       - name: Regression tests
         env:
           PYTHONPATH: .:individual_api
-        run: |
-          pytest -q \
-            individual_api/test_keirin_resilience_fix.py \
-            individual_api/test_keirin_odds_runtime_fix.py \
-            individual_api/test_keirin_real_pdf_adapter.py \
-            individual_api/test_keirin_bundle_adapter.py \
-            individual_api/test_keirin_jp_3pdf_adapter.py \
-            individual_api/test_keirin_dual_strategy_api.py \
-            individual_api/test_keirin_jp_odds_parser.py
+        run: pytest -q
       - name: FastAPI smoke test
         env:
           PYTHONPATH: .:individual_api
@@ -43,10 +35,11 @@ jobs:
           assert result["model_status"] == "keirin_jp_resilient_pdf_parse"
           assert result["selection_method"] == "real_full_parse_with_safe_fallbacks"
           assert result["closed_odds"] == "allowed"
-          assert result["missing_lines"] == "singleton_fallback"
+          assert result["active_missing_lines"] == "safe_stop_after_resilient_retry"
           assert result["upload_mode"] == "multiple_pdfs_auto_detect"
           assert len(result["required_roles"]) == 3
           assert result["strategies"]["shogo"] == 5
           assert result["strategies"]["residual"] == 3
+          assert result["c_simulations"] == 100000
           print(result)
           PY
