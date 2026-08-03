@@ -1,4 +1,4 @@
-from keirin_real_pdf_adapter import parse_basic_real, parse_hs_real
+from keirin_real_pdf_adapter import _PROFILE_LINE, parse_basic_real, parse_hs_real
 from individual_api.keirin_line_runtime_fix import _groups_from_positions, _valid
 
 
@@ -35,6 +35,14 @@ HS_TEXT = '''
    7 柏野  健吾
      岡 山/A3A2/逃                             6       11             0       15         19      0
 '''
+
+
+def test_all_official_rider_grades_are_accepted_in_single_and_history_pairs():
+    for grade in ("SS", "S1", "S2", "A1", "A2", "A3", "L1"):
+        assert _PROFILE_LINE.match(f"神奈川/{grade}/両")
+        assert _PROFILE_LINE.match(f"神奈川/{grade}{grade}/両")
+    assert _PROFILE_LINE.match("神奈川/SSSS/両")
+    assert _PROFILE_LINE.match("新潟/A1S2/逃")
 
 
 def test_actual_keirin_jp_layout_reads_seven_riders():

@@ -37,8 +37,9 @@ except ImportError:
 
 _VALID_COUNTS = {5, 6, 7, 8, 9}
 _NAME_SUFFIX = re.compile(r"(?:追加|補充|欠場|再乗)$")
+_RIDER_GRADE = r"(?:SS|S[12]|A[123]|L1)"
 _PROFILE_LINE = re.compile(
-    r"^([^/]+)/((?:[ASL]\d){1,2})/(逃|追|両)(?:\s+(.*))?$"
+    rf"^([^/]+)/({_RIDER_GRADE}{{1,2}})/(逃|追|両)(?:\s+(.*))?$"
 )
 _BASIC_VALUES = re.compile(
     r"^([0-9]{2,3}\.[0-9]{1,2})\s+(\d{1,2})\s+(\d{1,2})\s+"
@@ -192,7 +193,10 @@ def _coordinate_profile_rows(path: Path, value_kind: str) -> list[tuple[int, str
                     ]
                     profile_words.sort(key=lambda word: (float(word["top"]), float(word["x0"])))
                     profile = re.sub(r"\s+", "", "".join(_norm(str(word["text"])) for word in profile_words))
-                    profile_match = re.search(r"([^/]+)/((?:[ASL]\d){1,2})/(逃|追|両)", profile)
+                    profile_match = re.search(
+                        rf"([^/]+)/({_RIDER_GRADE}{{1,2}})/(逃|追|両)",
+                        profile,
+                    )
                     if not name or not profile_match:
                         continue
                     rows[bike] = (bike, name, profile_match.group(1), profile_match.group(3), values)
