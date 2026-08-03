@@ -23,8 +23,6 @@ def _groups_from_positions(found: list[int], xs: list[float]) -> list[list[int]]
     positive = sorted(gap for gap in gaps if gap > 0)
     if not positive:
         return [found]
-    # KEIRIN.JP uses two dominant spacings: within-line and between-line.
-    # Derive the split from this PDF instead of relying on a fixed pixel value.
     if len(set(round(gap, 1) for gap in positive)) >= 2:
         ordered = sorted(positive)
         jumps = [ordered[i] - ordered[i - 1] for i in range(1, len(ordered))]
@@ -60,12 +58,19 @@ def _coordinate_parse(path: Path, bikes: list[int]) -> list[list[int]] | None:
                         ]
                         if not row:
                             continue
-                        # Keep the horizontal row containing every bike exactly once.
-                        by_top: dict[int, list[dict]] = {}
+                        # Cluster by actual y-distance instead of fixed buckets.
+                        row.sort(key=lambda w: (float(w["top"]), float(w["x0"])))
+                        y_groups: list[list[dict]] = []
                         for word in row:
-                            key = round(float(word["top"]) / 4)
-                            by_top.setdefault(key, []).append(word)
-                        for words_on_row in by_top.values():
+                            if not y_groups:
+                                y_groups.append([word])
+                                continue
+                            mean_top = sum(float(item["top"]) for item in y_groups[-1]) / len(y_groups[-1])
+                            if abs(float(word["top"]) - mean_top) <= 7:
+                                y_groups[-1].append(word)
+                            else:
+                                y_groups.append([word])
+                        for words_on_row in y_groups:
                             words_on_row.sort(key=lambda w: float(w["x0"]))
                             found = [int(unicodedata.normalize("NFKC", w["text"])) for w in words_on_row]
                             if sorted(found) != sorted(bikes) or len(found) != len(bikes):
@@ -97,16 +102,35 @@ def _text_parse(path: Path, bikes: list[int]) -> list[list[int]] | None:
     return None
 
 
+def _candidate_pdfs(path: Path) -> list[Path]:
+    """The lineup is printed on all three KEIRIN.JP PDFs; retry every sibling PDF."""
+    candidates = [path]
+    try:
+        siblings = sorted(path.parent.glob("*.pdf"))
+    except OSError:
+        siblings = []
+    for sibling in siblings:
+        if sibling not in candidates:
+            candidates.append(sibling)
+    return candidates
+
+
 def parse_lines_resilient(pdf: str | Path, bikes: list[int]) -> list[list[int]]:
     path = Path(pdf)
-    parsed = _coordinate_parse(path, bikes) or _text_parse(path, bikes)
-    if parsed and _valid(parsed, bikes):
-        return parsed
-    raise PdfInputError("LINE_PARSE_FAILED", "並び予想を読み取れません。出走表PDFの並び予想欄を確認してください。")
+    attempted: list[str] = []
+    for candidate in _candidate_pdfs(path):
+        attempted.append(candidate.name)
+        parsed = _coordinate_parse(candidate, bikes) or _text_parse(candidate, bikes)
+        if parsed and _valid(parsed, bikes):
+            return parsed
+    raise PdfInputError(
+        "LINE_PARSE_FAILED_ALL_SOURCES",
+        "並び予想を3PDFすべてから読み取れません。",
+        attempted,
+    )
 
 
 def install_line_parser_fix() -> None:
-    # normalize_real_bundle imported _parse_lines by name, so patch both modules.
     from . import keirin_pdf_adapter
     from . import keirin_real_pdf_adapter
     keirin_pdf_adapter._parse_lines = parse_lines_resilient
