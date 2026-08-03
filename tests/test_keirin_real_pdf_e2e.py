@@ -87,10 +87,11 @@ def test_real_three_pdf_fastapi_returns_200_and_ui_binds_a_c_results() -> None:
         assert body["pdf_audit"]["rider_count"] == 9
         assert body["pdf_audit"]["odds_count"] == 72
         assert body["strategies"]["c"]["simulations"] == 100_000
-        assert body["strategies"]["c"]["purchase_status"] == "REFERENCE_ONLY"
+        assert body["strategies"]["c"]["seed"] == 3156
+        assert body["strategies"]["c"]["purchase_status"] == "NO_BET"
         assert body["strategies"]["c"]["purchase_candidates"] == []
-        assert body["strategies"]["c"]["ev_validated"] is False
-        assert all("ev" not in item for item in body["strategies"]["c"]["candidates"])
+        assert body["strategies"]["c"]["ev_formula"] == "probability * odds"
+        assert all("ev" in item for item in body["strategies"]["c"]["candidates"])
 
         html = client.get("/")
         assert html.status_code == 200
@@ -99,5 +100,6 @@ def test_real_three_pdf_fastapi_returns_200_and_ui_binds_a_c_results() -> None:
         assert 'id="decision"' in html.text
         assert "data.strategies?.a?.candidates" in html.text
         assert "data.strategies?.c?.candidates" in html.text
-        assert "買い目・EV判定ではありません" in html.text
-        assert "Number(v.ev)" not in html.text
+        assert "全2車単確率→最後にオッズで推定EV" in html.text
+        assert "Number(v.ev)" in html.text
+        assert "data.strategies?.c?.purchase_candidates" in html.text

@@ -2,17 +2,22 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from typing import Any
 
 import numpy as np
 
-VERSION = "2.1.0-ac-ranking-separated"
+VERSION = "2.2.0-c-ev-restored"
 N_SIMULATIONS = 100_000
+C_SEED = 3156
 C_VALIDATION_RACES = 876
 C_TOP6_HITS = 486
 C_TOP6_HIT_RATE = C_TOP6_HITS / C_VALIDATION_RACES
+C_MIN_PROBABILITY = 0.03
+C_MIN_ODDS = 8.0
+C_MAX_ODDS = 30.0
+C_MIN_EV = 1.00
+C_MIN_PURCHASE_CANDIDATES = 3
+C_MAX_PURCHASE_CANDIDATES = 5
 
 
 def _error(code: str, message: str, missing: list[str] | None = None) -> dict[str, Any]:
@@ -159,13 +164,7 @@ def _c_strategy(payload: dict[str, Any], riders: list[dict[str, Any]], lines: li
         line_scores.append(0.55 * lead[head] + 0.20 * ability[head] + 0.15 * member_ability + 0.10 * support)
     control_p = _softmax(np.asarray(line_scores), temperature=0.20)
 
-    seed_source = {
-        "grade": payload.get("grade"),
-        "riders": riders,
-        "lines": lines,
-        "conditions": payload.get("conditions", {}),
-    }
-    seed = int(hashlib.sha256(json.dumps(seed_source, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16], 16) % (2**32)
+    seed = C_SEED
     rng = np.random.default_rng(seed)
     controls = rng.choice(len(lines), size=N_SIMULATIONS, p=control_p)
     final_score = np.broadcast_to(ability, (N_SIMULATIONS, n)).copy()
@@ -243,14 +242,41 @@ def _c_strategy(payload: dict[str, Any], riders: list[dict[str, Any]], lines: li
                 continue
             p = float(probability[i, j])
             odd = float(odds[i, j])
+            ev = p * odd
+            ev_status = "PLUS" if ev >= C_MIN_EV else ("HOLD" if ev >= 0.80 else "NO_BET")
             all_pairs.append({
                 "pair": [first_bike, second_bike],
                 "probability": p,
                 "odds": odd,
+                "ev": ev,
+                "ev_status": ev_status,
                 "strategy": "C",
             })
     all_pairs.sort(key=lambda item: (-item["probability"], item["pair"]))
     candidates = [{**item, "rank": rank} for rank, item in enumerate(all_pairs[:6], start=1)]
+    for item in candidates:
+        item["purchase_eligible"] = bool(
+            item["probability"] >= C_MIN_PROBABILITY
+            and C_MIN_ODDS <= item["odds"] <= C_MAX_ODDS
+            and item["ev"] >= C_MIN_EV
+        )
+
+    provisional = sorted(
+        (item for item in candidates if item["purchase_eligible"]),
+        key=lambda item: (-item["ev"], -item["probability"], item["pair"]),
+    )[:C_MAX_PURCHASE_CANDIDATES]
+    purchase_candidates = provisional if len(provisional) >= C_MIN_PURCHASE_CANDIDATES else []
+    purchase_pairs = {tuple(item["pair"]) for item in purchase_candidates}
+    for item in candidates:
+        item["selected_for_purchase"] = tuple(item["pair"]) in purchase_pairs
+        if item["selected_for_purchase"]:
+            item["purchase_label"] = "購入"
+        elif item["purchase_eligible"]:
+            item["purchase_label"] = "点数不足"
+        elif item["ev_status"] == "HOLD":
+            item["purchase_label"] = "保留"
+        else:
+            item["purchase_label"] = "見送り"
 
     rider_scores = []
     for i, rider in enumerate(riders):
@@ -265,15 +291,27 @@ def _c_strategy(payload: dict[str, Any], riders: list[dict[str, Any]], lines: li
         })
     return {
         "name": "C方式 Ver.1.0 Frozen",
-        "selection_rule": "個人能力→展開分岐→固定シード10万回MC→予測確率上位6点",
+        "selection_rule": "個人能力→ライン/展開→Seed3156・10万回MC→全2車単確率→最後にオッズでEV→3〜5点",
         "candidate_count": 6,
-        "purchase_status": "REFERENCE_ONLY",
-        "purchase_candidates": [],
-        "validation_scope": "RANKING_ONLY",
+        "purchase_status": "BET" if purchase_candidates else "NO_BET",
+        "purchase_candidate_count": len(purchase_candidates),
+        "purchase_candidates": purchase_candidates,
+        "validation_scope": "RANKING_VALIDATED_EV_FORMULA_FIXED",
         "validation_races": C_VALIDATION_RACES,
         "validated_top6_hits": C_TOP6_HITS,
         "validated_top6_hit_rate": C_TOP6_HIT_RATE,
-        "ev_validated": False,
+        "ev_formula": "probability * odds",
+        "ev_formula_fixed": True,
+        "ev_backtest_validated": False,
+        "purchase_rules": {
+            "top_probability_pool": 6,
+            "min_probability": C_MIN_PROBABILITY,
+            "min_odds": C_MIN_ODDS,
+            "max_odds": C_MAX_ODDS,
+            "min_ev": C_MIN_EV,
+            "min_candidates": C_MIN_PURCHASE_CANDIDATES,
+            "max_candidates": C_MAX_PURCHASE_CANDIDATES,
+        },
         "simulations": N_SIMULATIONS,
         "seed": seed,
         "control_probabilities": [
@@ -296,15 +334,28 @@ def predict(payload: Any) -> dict[str, Any]:
     a_result = _a_strategy(riders, lines, odds)
     c_result = _c_strategy(payload, riders, lines, odds)
     a_pairs = {tuple(item["pair"]) for item in a_result["candidates"]}
-    c_pairs = {tuple(item["pair"]) for item in c_result["candidates"]}
+    c_pairs = {tuple(item["pair"]) for item in c_result["purchase_candidates"]}
+    a_ready = bool(a_result["candidates"])
+    c_ready = bool(c_result["purchase_candidates"])
+    if a_ready and c_ready:
+        purchase_status = "A_AND_C_BET"
+    elif a_ready:
+        purchase_status = "A_BET"
+    elif c_ready:
+        purchase_status = "C_BET"
+    else:
+        purchase_status = "NO_BET"
     return {
         "version": VERSION,
         "status": "OK",
         "race_type": "MEN",
-        "purchase_status": "A_BET" if a_result["candidates"] else "NO_BET",
+        "purchase_status": purchase_status,
         "strategies": {"a": a_result, "c": c_result},
-        # Top-level candidates are purchase candidates. C is ranking reference only.
-        "candidates": a_result["candidates"],
+        "candidates": a_result["candidates"] + c_result["purchase_candidates"],
+        "purchase_candidates_by_strategy": {
+            "a": a_result["candidates"],
+            "c": c_result["purchase_candidates"],
+        },
         "common_candidates": [list(pair) for pair in sorted(a_pairs & c_pairs)],
         "audit": {
             "engines_separated": True,
@@ -313,7 +364,9 @@ def predict(payload: Any) -> dict[str, Any]:
             "odds_used_in_a_filter": True,
             "odds_used_in_c_probability": False,
             "c_simulations": N_SIMULATIONS,
-            "c_validation_scope": "RANKING_ONLY",
-            "c_ev_used_for_purchase": False,
+            "c_validation_scope": "RANKING_VALIDATED_EV_FORMULA_FIXED",
+            "c_ev_formula": "probability * odds",
+            "c_ev_used_for_purchase": True,
+            "c_odds_applied_after_probability": True,
         },
     }
