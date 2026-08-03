@@ -69,6 +69,9 @@ def test_ss_grade_real_three_pdf_normalization_and_both_strategies() -> None:
     assert result["strategies"]["a"]["candidates"][0]["pair"] == [1, 4]
     assert result["strategies"]["c"]["simulations"] == N_SIMULATIONS == 100_000
     assert len(result["strategies"]["c"]["candidates"]) == 6
+    assert result["strategies"]["c"]["purchase_status"] == "REFERENCE_ONLY"
+    assert result["strategies"]["c"]["purchase_candidates"] == []
+    assert all("ev" not in item for item in result["strategies"]["c"]["candidates"])
 
 
 def test_ss_grade_real_three_pdf_fastapi_returns_200_with_a_and_c() -> None:
@@ -89,10 +92,12 @@ def test_ss_grade_real_three_pdf_fastapi_returns_200_with_a_and_c() -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "OK"
-    assert body["purchase_status"] == "A_AND_C_READY"
+    assert body["purchase_status"] == "A_BET"
     assert body["pdf_audit"]["rider_count"] == 9
     assert body["pdf_audit"]["odds_count"] == 72
     assert body["pdf_audit"]["lines"] == EXPECTED_LINES
     assert body["strategies"]["a"]["candidates"][0]["pair"] == [1, 4]
     assert body["strategies"]["c"]["simulations"] == 100_000
     assert len(body["strategies"]["c"]["candidates"]) == 6
+    assert body["strategies"]["c"]["purchase_status"] == "REFERENCE_ONLY"
+    assert body["strategies"]["c"]["purchase_candidates"] == []

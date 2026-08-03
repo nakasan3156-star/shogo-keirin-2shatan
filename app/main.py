@@ -53,8 +53,12 @@ def health() -> dict[str, Any]:
         "active_selection_method": "real_full_parse_strict_same_race",
         "active_missing_lines": "safe_stop_after_resilient_retry",
         "active_line_parser": "adaptive_coordinate_and_text",
-        "active_strategies": {"a": "max_3", "c": "probability_top_6"},
+        "active_strategies": {
+            "a": "purchase_filter_max_3",
+            "c": "validated_ranking_top_6_reference_only",
+        },
         "c_simulations": 100000,
+        "c_ev_purchase": "disabled_not_validated",
         "residual_b": "removed_from_prediction_path",
     }
 
