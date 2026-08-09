@@ -1,0 +1,118 @@
+name: 競輪展開予測V2 未使用外部検証
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/keirin-development-v2-eval.yml"
+      - "historical_pipeline/development_v2_backtest.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keirin-development-v2-2026-03-04
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  RELEASE_TAG: keirin-development-v2-2026-03-04
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" --title "競輪展開予測V2 2026年3〜4月外部検証" \
+              --notes "開発・条件固定は2025年だけ。2026年3〜4月は完全未使用の最終比較専用。"
+
+  manifest:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r historical_pipeline/requirements-historical.txt
+      - id: existing
+        run: |
+          if gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fxq eligible_manifest_2026_03_04.csv.gz; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.existing.outputs.skip != 'true'
+        run: |
+          mkdir -p manifest
+          python historical_pipeline/discover_period_manifest.py --start 2026-03-01 --end 2026-04-30 \
+            --output manifest/eligible_manifest_2026_03_04.csv.gz --audit manifest/manifest_audit_2026_03_04.json --workers 24
+      - if: steps.existing.outputs.skip != 'true'
+        run: gh release upload "$RELEASE_TAG" manifest/eligible_manifest_2026_03_04.csv.gz manifest/manifest_audit_2026_03_04.json
+
+  collect:
+    needs: [prepare, manifest]
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix: {month: ["03", "04"]}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r historical_pipeline/requirements-historical.txt
+      - run: |
+          mkdir -p manifest
+          gh release download "$RELEASE_TAG" --pattern eligible_manifest_2026_03_04.csv.gz --dir manifest
+      - id: existing
+        run: |
+          asset="keirin_2026_2026${{ matrix.month }}.zip"
+          if gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fxq "$asset"; then echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.existing.outputs.skip != 'true'
+        run: |
+          python historical_pipeline/collect_month.py --month "2026${{ matrix.month }}" \
+            --manifest manifest/eligible_manifest_2026_03_04.csv.gz --asset-prefix keirin_2026 --workers 80
+      - if: steps.existing.outputs.skip != 'true'
+        run: gh release upload "$RELEASE_TAG" "dist/keirin_2026_2026${{ matrix.month }}.zip"
+
+  build:
+    needs: [manifest, collect]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r historical_pipeline/requirements-historical.txt
+      - run: |
+          mkdir -p monthly raw manifest
+          gh release download "$RELEASE_TAG" --pattern 'keirin_2026_2026??.zip' --dir monthly
+          gh release download "$RELEASE_TAG" --pattern eligible_manifest_2026_03_04.csv.gz --dir manifest
+          test "$(find monthly -name '*.zip' | wc -l)" -eq 2
+          for archive in monthly/*.zip; do month="${archive%.zip}"; month="${month##*_}"; mkdir -p "raw/$month"; unzip -q "$archive" -d "raw/$month"; done
+          python historical_pipeline/build_dataset.py --manifest manifest/eligible_manifest_2026_03_04.csv.gz \
+            --raw-root raw --output-dir dataset_2026 --label 2026_03_04 --workers 8
+          zip -1 -r keirin_2026_03_04_dataset.zip dataset_2026
+          gh release upload "$RELEASE_TAG" keirin_2026_03_04_dataset.zip --clobber
+
+  compare:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12", cache: pip}
+      - run: pip install -r historical_pipeline/requirements-historical.txt
+      - run: |
+          mkdir -p train external
+          gh release download keirin-data-2025 --pattern keirin_2025_dataset.zip
+          gh release download "$RELEASE_TAG" --pattern keirin_2026_03_04_dataset.zip
+          unzip -q keirin_2025_dataset.zip -d train_unpack
+          unzip -q keirin_2026_03_04_dataset.zip -d external_unpack
+          cp -R train_unpack/dataset/. train/
+          cp -R external_unpack/dataset_2026/. external/
+      - name: PR31とV2を未使用期間で比較
+        run: |
+          python historical_pipeline/development_v2_backtest.py --train-dir train --external-dir external \
+            --external-label 2026_03_04 --external-start 20260301 --external-end 20260430 --output-dir development_v2_results
+      - run: |
+          zip -9 -r keirin_development_v2_2026_03_04_results.zip development_v2_results
+          gh release upload "$RELEASE_TAG" keirin_development_v2_2026_03_04_results.zip --clobber
