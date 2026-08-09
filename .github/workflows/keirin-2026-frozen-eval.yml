@@ -1,0 +1,167 @@
+name: PR31凍結 2026年1〜2月外部検証
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/keirin-2026-frozen-eval.yml"
+      - "historical_pipeline/discover_period_manifest.py"
+      - "historical_pipeline/collect_month.py"
+      - "historical_pipeline/build_dataset.py"
+      - "historical_pipeline/evaluate_frozen_2026.py"
+      - "historical_pipeline/chatgpt_baseline_backtest.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keirin-pr31-frozen-2026-01-02
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  RELEASE_TAG: keirin-pr31-frozen-2026-01-02
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 保存先を準備
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" --title "PR #31 凍結外部検証 2026年1〜2月" \
+              --notes "PR #31のロジック・条件・閾値を変更しない完全未使用期間の外部検証。"
+
+  manifest:
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r historical_pipeline/requirements-historical.txt
+      - name: 既存manifest確認
+        id: existing
+        run: |
+          if gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fxq eligible_manifest_2026_01_02.csv.gz; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: 対象レースを確定
+        if: steps.existing.outputs.skip != 'true'
+        run: |
+          mkdir -p manifest
+          python historical_pipeline/discover_period_manifest.py \
+            --start 2026-01-01 --end 2026-02-28 \
+            --output manifest/eligible_manifest_2026_01_02.csv.gz \
+            --audit manifest/manifest_audit_2026_01_02.json --workers 24
+      - name: manifestを保存
+        if: steps.existing.outputs.skip != 'true'
+        run: |
+          gh release upload "$RELEASE_TAG" \
+            manifest/eligible_manifest_2026_01_02.csv.gz \
+            manifest/manifest_audit_2026_01_02.json
+
+  collect:
+    needs: [prepare, manifest]
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        month: ["01", "02"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r historical_pipeline/requirements-historical.txt
+      - name: manifest取得
+        run: |
+          mkdir -p manifest
+          gh release download "$RELEASE_TAG" --pattern eligible_manifest_2026_01_02.csv.gz --dir manifest
+      - name: 完成済み月を確認
+        id: existing
+        run: |
+          asset="keirin_2026_2026${{ matrix.month }}.zip"
+          if gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fxq "$asset"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: 未完成月だけ収集
+        if: steps.existing.outputs.skip != 'true'
+        run: |
+          python historical_pipeline/collect_month.py \
+            --month "2026${{ matrix.month }}" \
+            --manifest manifest/eligible_manifest_2026_01_02.csv.gz \
+            --asset-prefix keirin_2026 --workers 80
+      - name: 月別ZIPを保存
+        if: steps.existing.outputs.skip != 'true'
+        run: gh release upload "$RELEASE_TAG" "dist/keirin_2026_2026${{ matrix.month }}.zip"
+
+  build:
+    needs: [prepare, manifest, collect]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r historical_pipeline/requirements-historical.txt
+      - name: 2か月分を展開
+        run: |
+          mkdir -p monthly raw manifest
+          gh release download "$RELEASE_TAG" --pattern 'keirin_2026_2026??.zip' --dir monthly
+          gh release download "$RELEASE_TAG" --pattern eligible_manifest_2026_01_02.csv.gz --dir manifest
+          test "$(find monthly -name '*.zip' | wc -l)" -eq 2
+          for archive in monthly/*.zip; do
+            month="${archive%.zip}"
+            month="${month##*_}"
+            mkdir -p "raw/$month"
+            unzip -q "$archive" -d "raw/$month"
+          done
+      - name: 2026年外部検証データ構築
+        run: |
+          python historical_pipeline/build_dataset.py \
+            --manifest manifest/eligible_manifest_2026_01_02.csv.gz \
+            --raw-root raw --output-dir dataset_2026 --label 2026_01_02 --workers 8
+      - name: データセット保存
+        run: |
+          zip -1 -r keirin_2026_01_02_dataset.zip dataset_2026
+          gh release upload "$RELEASE_TAG" keirin_2026_01_02_dataset.zip --clobber
+
+  frozen-backtest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r historical_pipeline/requirements-historical.txt
+      - name: 2025学習データと未使用2026データを取得
+        run: |
+          mkdir -p train external
+          gh release download keirin-data-2025 --pattern keirin_2025_dataset.zip
+          gh release download "$RELEASE_TAG" --pattern keirin_2026_01_02_dataset.zip
+          unzip -q keirin_2025_dataset.zip -d train_unpack
+          unzip -q keirin_2026_01_02_dataset.zip -d external_unpack
+          cp -R train_unpack/dataset/. train/
+          cp -R external_unpack/dataset_2026/. external/
+      - name: PR31の固定ルールでのみ評価
+        run: |
+          python historical_pipeline/evaluate_frozen_2026.py \
+            --train-dir train --external-dir external --output-dir frozen_2026_results
+      - name: 結果を保存
+        run: |
+          zip -9 -r keirin_pr31_frozen_2026_01_02_results.zip frozen_2026_results
+          gh release upload "$RELEASE_TAG" keirin_pr31_frozen_2026_01_02_results.zip --clobber
