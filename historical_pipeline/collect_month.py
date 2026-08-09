@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect one month of 2025 keirin data and package it as a resumable release asset."""
+"""Collect one month of keirin data and package it as a resumable release asset."""
 
 from __future__ import annotations
 
@@ -71,6 +71,7 @@ def main() -> None:
     ap.add_argument("--month", required=True, help="YYYYMM")
     ap.add_argument("--manifest", default="historical_pipeline/data/eligible_manifest_2025.csv.gz")
     ap.add_argument("--output-dir", default="dist")
+    ap.add_argument("--asset-prefix", default="keirin_2025")
     ap.add_argument("--workers", type=int, default=80)
     args = ap.parse_args()
 
@@ -116,7 +117,7 @@ def main() -> None:
     if errors or len(payloads) != len(rows):
         raise SystemExit(f"month incomplete: {len(payloads)}/{len(rows)}")
 
-    archive = out_dir / f"keirin_2025_{args.month}.zip"
+    archive = out_dir / f"{args.asset_prefix}_{args.month}.zip"
     with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for rid in sorted(payloads):
             for source, body in payloads[rid].items():
