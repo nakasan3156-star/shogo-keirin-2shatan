@@ -1,6 +1,11 @@
 name: 競輪2025 収集・バックテスト
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/keirin-2025-pipeline.yml"
+      - "historical_pipeline/**"
   workflow_dispatch:
     inputs:
       phase:
@@ -39,7 +44,7 @@ jobs:
               --notes "月別収集、統合データ、Pythonバックテストの保存先。"
 
   collect:
-    if: inputs.phase == 'full' || inputs.phase == 'collect'
+    if: github.event_name == 'push' || inputs.phase == 'full' || inputs.phase == 'collect'
     needs: prepare
     strategy:
       fail-fast: false
@@ -50,19 +55,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: 月指定以外を終了
-        if: inputs.month != 'all' && inputs.month != matrix.month
+        if: github.event_name != 'push' && inputs.month != 'all' && inputs.month != matrix.month
         run: echo "対象外月" && exit 0
       - name: Python準備
-        if: inputs.month == 'all' || inputs.month == matrix.month
+        if: github.event_name == 'push' || inputs.month == 'all' || inputs.month == matrix.month
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
       - name: 依存関係
-        if: inputs.month == 'all' || inputs.month == matrix.month
+        if: github.event_name == 'push' || inputs.month == 'all' || inputs.month == matrix.month
         run: pip install -r historical_pipeline/requirements-historical.txt
       - name: 完成済み月を確認
-        if: inputs.month == 'all' || inputs.month == matrix.month
+        if: github.event_name == 'push' || inputs.month == 'all' || inputs.month == matrix.month
         id: existing
         run: |
           asset="keirin_2025_2025${{ matrix.month }}.zip"
@@ -73,14 +78,14 @@ jobs:
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
       - name: 未完成月だけ収集
-        if: (inputs.month == 'all' || inputs.month == matrix.month) && steps.existing.outputs.skip != 'true'
+        if: (github.event_name == 'push' || inputs.month == 'all' || inputs.month == matrix.month) && steps.existing.outputs.skip != 'true'
         run: python historical_pipeline/collect_month.py --month "2025${{ matrix.month }}" --workers 80
       - name: 月別ZIPを永久保存
-        if: (inputs.month == 'all' || inputs.month == matrix.month) && steps.existing.outputs.skip != 'true'
+        if: (github.event_name == 'push' || inputs.month == 'all' || inputs.month == matrix.month) && steps.existing.outputs.skip != 'true'
         run: gh release upload "$RELEASE_TAG" "dist/keirin_2025_2025${{ matrix.month }}.zip"
 
   build:
-    if: always() && (inputs.phase == 'full' || inputs.phase == 'build') && needs.prepare.result == 'success' && (needs.collect.result == 'success' || needs.collect.result == 'skipped')
+    if: always() && (github.event_name == 'push' || inputs.phase == 'full' || inputs.phase == 'build') && needs.prepare.result == 'success' && (needs.collect.result == 'success' || needs.collect.result == 'skipped')
     needs: [prepare, collect]
     runs-on: ubuntu-latest
     steps:
@@ -108,7 +113,7 @@ jobs:
           gh release upload "$RELEASE_TAG" keirin_2025_dataset.zip --clobber
 
   backtest:
-    if: always() && (inputs.phase == 'full' || inputs.phase == 'backtest') && needs.prepare.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    if: always() && (github.event_name == 'push' || inputs.phase == 'full' || inputs.phase == 'backtest') && needs.prepare.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
     needs: [prepare, build]
     runs-on: ubuntu-latest
     steps:
