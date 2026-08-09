@@ -198,6 +198,7 @@ def collect_event(event: dict[str, str]):
 
 
 def parse_event(event: dict[str, str], card, result):
+    base = f"https://keirin.kdreams.jp/{event['slug']}"
     result_ids, payouts = parse_results(result)
     title = card.xpath("//title/text()")
     venue_match = re.search(r"(.+?)競輪", clean(title[0]) if title else "")
