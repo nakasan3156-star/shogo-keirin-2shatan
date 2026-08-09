@@ -1,0 +1,135 @@
+name: 競輪2025 収集・バックテスト
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/keirin-2025-pipeline.yml"
+      - "historical_pipeline/**"
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: 実行工程
+        required: true
+        default: full
+        type: choice
+        options: [full, collect, build, backtest]
+      month:
+        description: 収集月（full/collect時）
+        required: true
+        default: all
+        type: choice
+        options: [all, "01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keirin-historical-2025
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ github.token }}
+  RELEASE_TAG: keirin-data-2025
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release保存先を準備
+        run: |
+          gh release view "$RELEASE_TAG" >/dev/null 2>&1 || \
+            gh release create "$RELEASE_TAG" --title "競輪2025 データ・バックテスト" \
+              --notes "月別収集、統合データ、Pythonバックテストの保存先。"
+
+  collect:
+    if: github.event_name == 'push' || inputs.phase == 'full' || inputs.phase == 'collect'
+    needs: prepare
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        month: ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 月指定以外を終了
+        if: github.event_name != 'push' && inputs.month != 'all' && inputs.month != matrix.month
+        run: echo "対象外月" && exit 0
+      - name: Python準備
+        if: github.event_name == 'push' || inputs.month == 'all' || inputs.month == matrix.month
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: 依存関係
+        if: github.event_name == 'push' || inputs.month == 'all' || inputs.month == matrix.month
+        run: pip install -r historical_pipeline/requirements-historical.txt
+      - name: 完成済み月を確認
+        if: github.event_name == 'push' || inputs.month == 'all' || inputs.month == matrix.month
+        id: existing
+        run: |
+          asset="keirin_2025_2025${{ matrix.month }}.zip"
+          if gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | grep -Fxq "$asset"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "$asset は完成済みのため再取得しません"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: 未完成月だけ収集
+        if: (github.event_name == 'push' || inputs.month == 'all' || inputs.month == matrix.month) && steps.existing.outputs.skip != 'true'
+        run: python historical_pipeline/collect_month.py --month "2025${{ matrix.month }}" --workers 80
+      - name: 月別ZIPを永久保存
+        if: (github.event_name == 'push' || inputs.month == 'all' || inputs.month == matrix.month) && steps.existing.outputs.skip != 'true'
+        run: gh release upload "$RELEASE_TAG" "dist/keirin_2025_2025${{ matrix.month }}.zip"
+
+  build:
+    if: always() && (github.event_name == 'push' || inputs.phase == 'full' || inputs.phase == 'build') && needs.prepare.result == 'success' && (needs.collect.result == 'success' || needs.collect.result == 'skipped')
+    needs: [prepare, collect]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r historical_pipeline/requirements-historical.txt
+      - name: 12か月を取得・展開
+        run: |
+          mkdir -p monthly raw
+          gh release download "$RELEASE_TAG" --pattern 'keirin_2025_2025??.zip' --dir monthly
+          test "$(find monthly -name '*.zip' | wc -l)" -eq 12
+          for archive in monthly/*.zip; do
+            month="$(basename "$archive" .zip | tail -c 7)"
+            mkdir -p "raw/$month"
+            unzip -q "$archive" -d "raw/$month"
+          done
+      - name: CSV・SQLite構築
+        run: python historical_pipeline/build_dataset.py --raw-root raw --output-dir dataset --workers 8
+      - name: 統合データ保存
+        run: |
+          zip -1 -r keirin_2025_dataset.zip dataset
+          gh release upload "$RELEASE_TAG" keirin_2025_dataset.zip --clobber
+
+  backtest:
+    if: always() && (github.event_name == 'push' || inputs.phase == 'full' || inputs.phase == 'backtest') && needs.prepare.result == 'success' && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r historical_pipeline/requirements-historical.txt
+      - name: 統合データ取得
+        run: |
+          gh release download "$RELEASE_TAG" --pattern keirin_2025_dataset.zip
+          unzip -q keirin_2025_dataset.zip
+      - name: Pythonバックテスト
+        run: python historical_pipeline/backtest.py --dataset-dir dataset --output-dir backtest
+      - name: 結果保存
+        run: |
+          zip -9 -r keirin_2025_backtest_results.zip backtest
+          gh release upload "$RELEASE_TAG" keirin_2025_backtest_results.zip --clobber
