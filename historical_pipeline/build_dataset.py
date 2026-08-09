@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build leakage-separated CSV/SQLite tables from the 12 monthly archives."""
+"""Build leakage-separated CSV/SQLite tables from monthly archives."""
 
 from __future__ import annotations
 
@@ -236,6 +236,7 @@ def main() -> None:
     ap.add_argument("--raw-root", default="raw")
     ap.add_argument("--output-dir", default="dataset")
     ap.add_argument("--workers", type=int, default=8)
+    ap.add_argument("--label", default="2025", help="output filename label")
     args = ap.parse_args()
     with gzip.open(args.manifest, "rt", encoding="utf-8", newline="") as fh:
         manifest = list(csv.DictReader(fh))
@@ -257,15 +258,16 @@ def main() -> None:
 
     out = Path(args.output_dir); out.mkdir(parents=True, exist_ok=True)
     race_fields = list(manifest[0]) + ["distance_m", "weather", "wind_speed", "official_result_rows", "exacta_odds_rows"]
-    write_csv(out / "races_2025.csv", race_fields, sorted(races, key=lambda x: (x["race_date"], x["race_id"])))
-    write_csv(out / "rider_features_2025.csv", FEATURE_FIELDS, sorted(features, key=lambda x: (x["race_date"], x["race_id"], int(x["car_no"]))))
-    write_csv(out / "exacta_odds_2025.csv", ["race_id", "first_car", "second_car", "combination", "exacta_odds"], odds)
-    write_csv(out / "official_results_2025.csv", RESULT_FIELDS, results)
+    label = args.label
+    write_csv(out / f"races_{label}.csv", race_fields, sorted(races, key=lambda x: (x["race_date"], x["race_id"])))
+    write_csv(out / f"rider_features_{label}.csv", FEATURE_FIELDS, sorted(features, key=lambda x: (x["race_date"], x["race_id"], int(x["car_no"]))))
+    write_csv(out / f"exacta_odds_{label}.csv", ["race_id", "first_car", "second_car", "combination", "exacta_odds"], odds)
+    write_csv(out / f"official_results_{label}.csv", RESULT_FIELDS, results)
 
-    db = out / "keirin_backtest_2025.sqlite"
+    db = out / f"keirin_backtest_{label}.sqlite"
     conn = sqlite3.connect(db)
-    for table, path in [("races", out / "races_2025.csv"), ("rider_features", out / "rider_features_2025.csv"),
-                        ("exacta_odds", out / "exacta_odds_2025.csv"), ("official_results", out / "official_results_2025.csv")]:
+    for table, path in [("races", out / f"races_{label}.csv"), ("rider_features", out / f"rider_features_{label}.csv"),
+                        ("exacta_odds", out / f"exacta_odds_{label}.csv"), ("official_results", out / f"official_results_{label}.csv")]:
         with path.open(encoding="utf-8-sig", newline="") as fh:
             reader = csv.reader(fh); fields = next(reader)
             conn.execute(f'DROP TABLE IF EXISTS "{table}"')
