@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout, as_completed
+from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
@@ -17,6 +18,7 @@ from . import keirin_line_runtime_fix as line_runtime
 from . import keirin_pdf_adapter as pdf_adapter
 from . import keirin_real_pdf_adapter as real_adapter
 from . import pr31_runtime
+from . import previous_day_kdreams as previous_day
 
 _ORIGINAL_EXTRACT_TEXT = pdf_adapter._extract_text
 _ORIGINAL_PARSE_LINES = line_runtime.parse_lines_from_pdfs
@@ -65,7 +67,6 @@ def _parse_basic_fixed(text: str, path: str | Path | None = None) -> list[dict[s
         raise real_adapter.PdfInputError("FIXED_ROLE_NOT_BASIC", "H/S着度数PDFです")
     if basic_count >= 3 or "競走得点" in header:
         return _ORIGINAL_PARSE_BASIC(text, path)
-    # Unknown extraction layout: retain the existing strict parser as fallback.
     return _ORIGINAL_PARSE_BASIC(text, path)
 
 
@@ -110,6 +111,41 @@ def _fast_consensus_lines(
     return _ORIGINAL_PARSE_LINES(unique_paths, bikes)
 
 
+def _resolve_day_parallel(
+    venue: str | None,
+    race_date: str | None,
+    race_no: int,
+    rider_names: list[str],
+) -> int:
+    """Resolve 最終日/unknown day number without six sequential KDreams waits."""
+    if not venue or venue not in previous_day.VENUES or not race_date or race_no <= 0:
+        return 0
+    try:
+        current = datetime.strptime(race_date, "%Y-%m-%d")
+    except ValueError:
+        return 0
+
+    code, slug = previous_day.VENUES[venue]
+
+    def fetch_candidate(candidate: int) -> tuple[int, str, str]:
+        url, _start = previous_day._current_race_url(code, slug, current, candidate, race_no)
+        return candidate, url, previous_day._fetch_html(url)
+
+    with ThreadPoolExecutor(max_workers=6, thread_name_prefix="pr31-day-resolve") as pool:
+        futures = [pool.submit(fetch_candidate, candidate) for candidate in range(1, 7)]
+        for future in as_completed(futures):
+            try:
+                candidate, _url, html = future.result()
+            except Exception:
+                continue
+            if previous_day._current_page_matches(html, current, rider_names):
+                for pending in futures:
+                    if pending is not future:
+                        pending.cancel()
+                return candidate
+    return 0
+
+
 def _bounded_previous_day(
     venue: str | None,
     race_date: str | None,
@@ -118,6 +154,11 @@ def _bounded_previous_day(
     rider_names: list[str],
 ) -> dict[str, Any]:
     """Optional KDreams enrichment must never block the main PR31 prediction."""
+    if day_no == 0:
+        resolved = _resolve_day_parallel(venue, race_date, race_no, rider_names)
+        if resolved >= 1:
+            day_no = resolved
+
     if day_no == 1:
         return {
             "status": "FIRST_DAY_SKIPPED",
@@ -125,6 +166,7 @@ def _bounded_previous_day(
             "resolved_day_no": 1,
             "riders": {},
         }
+
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pr31-prevday")
     future = executor.submit(
         _ORIGINAL_FETCH_PREVIOUS_DAY,
@@ -162,19 +204,15 @@ def install_production_runtime_fix() -> None:
     if _INSTALLED:
         return
 
-    # All modules resolve these aliases at runtime; cache each KEIRIN.JP PDF text once.
     pdf_adapter._extract_text = _extract_text_cached
     real_adapter._extract_text = _extract_text_cached
     line_runtime._extract_text = _extract_text_cached
     pr31_runtime._extract_text = _extract_text_cached
 
-    # Fixed KEIRIN.JP roles: reject obviously wrong PDFs before expensive coordinates.
     real_adapter.parse_basic_real = _parse_basic_fixed
     real_adapter.parse_hs_real = _parse_hs_fixed
 
-    # Two official PDFs must independently agree before the fast lineup path is accepted.
     line_runtime.parse_lines_from_pdfs = _fast_consensus_lines
 
-    # Previous-day web enrichment is best-effort; PR31 continues without fabrication on timeout.
     pr31_runtime.fetch_previous_day = _bounded_previous_day
     _INSTALLED = True
