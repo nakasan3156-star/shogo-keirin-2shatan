@@ -47,7 +47,6 @@ jobs:
             pr31_frozen.sha256
           retention-days: 30
       - name: 固定Releaseへ配布
-        if: github.event_name == 'push'
         run: |
           gh release view pr31-runtime-v1 >/dev/null 2>&1 || \
             gh release create pr31-runtime-v1 --title "PR31 Frozen Runtime v1" --notes "PR #31を2025年固定データ・固定分割で再生成した本番API用モデル。"
