@@ -14,6 +14,7 @@ permissions:
 
 env:
   GH_TOKEN: ${{ github.token }}
+  PR31_MODEL_SHA256: 6aaaa9f1ce13db1e86b91b377997a8580be82948381d69097839a9b5673490e6
 
 jobs:
   evaluate:
@@ -25,21 +26,25 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: pip install -r historical_pipeline/requirements-historical.txt
-      - name: 2025/2026固定データ取得
+      - name: 2025/2026固定データと本番PR31 Frozen取得
         run: |
           gh release download keirin-data-2025 --pattern keirin_2025_dataset.zip
           gh release download keirin-pr31-frozen-2026-01-02 --pattern keirin_2026_01_02_dataset.zip
+          mkdir -p model
+          gh release download pr31-runtime-v1 --pattern pr31_frozen.joblib --dir model
+          echo "$PR31_MODEL_SHA256  model/pr31_frozen.joblib" | sha256sum -c -
           unzip -q keirin_2025_dataset.zip -d train_unpack
           unzip -q keirin_2026_01_02_dataset.zip -d external_unpack
           mkdir -p train external
           cp -R train_unpack/dataset/. train/
           cp -R external_unpack/dataset_2026/. external/
-      - name: PR31固定 vs 3つ目補正 A/B評価
+      - name: PR31 Frozen固定 vs 3つ目補正 A/B評価
         working-directory: historical_pipeline
         run: |
           python evaluate_pr31_validated_prevday.py \
             --train-dir ../train \
             --external-dir ../external \
+            --model ../model/pr31_frozen.joblib \
             --output-dir ../validated_prevday_eval
       - uses: actions/upload-artifact@v4
         with:
