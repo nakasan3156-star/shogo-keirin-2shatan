@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - "historical_pipeline/venue_edge_analysis.py"
+      - "historical_pipeline/run_venue_edge_analysis.py"
       - ".github/workflows/keirin-venue-edge-analysis.yml"
   workflow_dispatch:
 
@@ -34,8 +35,10 @@ jobs:
           cp -R train_unpack/dataset/. train/
           cp -R external_unpack/dataset_2026/. external/
       - name: 場差の交絡除去・再現性・ROI検証
+        shell: bash
         run: |
-          python historical_pipeline/venue_edge_analysis.py \
+          set -o pipefail
+          python historical_pipeline/run_venue_edge_analysis.py \
             --train-dir train --external-dir external --output-dir venue_analysis \
             | tee venue_analysis_run.log
       - name: 結果一覧
