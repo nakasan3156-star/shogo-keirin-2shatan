@@ -50,6 +50,7 @@ def health() -> dict[str, Any]:
         "upload_mode": "keirin_jp_three_pdfs_auto_detect",
         "selection_method": "PR31_probability_then_conditional_exacta_then_calibration_then_EV",
         "previous_day": "day2_or_later_only_KDreams_best_effort",
+        "previous_day_resolver": "parallel_v1",
         "first_day": "no_previous_day_adjustment",
         "purchase_points": "3_to_5_or_no_bet",
         "missing_previous_day": "continue_without_fabrication",
