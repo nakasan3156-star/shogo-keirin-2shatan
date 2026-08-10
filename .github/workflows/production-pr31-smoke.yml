@@ -9,6 +9,9 @@ on:
       - "individual_api/**"
       - "Dockerfile"
       - "render.yaml"
+  pull_request:
+    paths:
+      - ".github/workflows/production-pr31-smoke.yml"
   workflow_dispatch:
 
 permissions:
