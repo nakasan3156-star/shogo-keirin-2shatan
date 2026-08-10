@@ -1,0 +1,39 @@
+name: PR31 Frozen API bundle
+
+on:
+  pull_request:
+    paths:
+      - "historical_pipeline/build_pr31_runtime_bundle.py"
+      - "historical_pipeline/chatgpt_baseline_backtest.py"
+      - ".github/workflows/build-pr31-runtime.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r historical_pipeline/requirements-historical.txt joblib
+      - name: 2025固定データ取得
+        run: |
+          gh release download keirin-data-2025 --pattern keirin_2025_dataset.zip
+          unzip -q keirin_2025_dataset.zip
+      - name: PR31を同一条件でFrozen化
+        run: |
+          python historical_pipeline/build_pr31_runtime_bundle.py --dataset-dir dataset --output pr31_frozen.joblib
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr31-frozen-runtime
+          path: pr31_frozen.joblib
+          retention-days: 30
