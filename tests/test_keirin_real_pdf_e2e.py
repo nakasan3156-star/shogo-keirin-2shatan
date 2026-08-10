@@ -72,18 +72,20 @@ def test_real_three_pdf_normalization_and_pr31(monkeypatch) -> None:
 def test_real_three_pdf_fastapi_returns_200_and_ui_binds_pr31_results(monkeypatch) -> None:
     monkeypatch.setattr("individual_api.pr31_runtime.fetch_previous_day", _no_network_previous)
     with TestClient(app) as client:
-        handles = [ODDS.open("rb"), BASIC.open("rb"), HS.open("rb")]
+        basic_handle, hs_handle, odds_handle = BASIC.open("rb"), HS.open("rb"), ODDS.open("rb")
         try:
             response = client.post(
-                "/analyze-bundle",
-                files=[
-                    ("files", (path.name, handle, "application/pdf"))
-                    for path, handle in zip((ODDS, BASIC, HS), handles)
-                ],
+                "/analyze",
+                files={
+                    "basic_pdf": (BASIC.name, basic_handle, "application/pdf"),
+                    "hs_pdf": (HS.name, hs_handle, "application/pdf"),
+                    "odds_pdf": (ODDS.name, odds_handle, "application/pdf"),
+                },
             )
         finally:
-            for handle in handles:
-                handle.close()
+            basic_handle.close()
+            hs_handle.close()
+            odds_handle.close()
 
         assert response.status_code == 200
         body = response.json()
@@ -103,7 +105,11 @@ def test_real_three_pdf_fastapi_returns_200_and_ui_binds_pr31_results(monkeypatc
         html = client.get("/")
         assert html.status_code == 200
         assert "PR31" in html.text
-        assert "A方式・C方式：撤廃" in html.text
+        assert "A方式・C方式：撤廃" not in html.text
+        assert "① 基本情報PDF" in html.text
+        assert "② H/S・着度数PDF" in html.text
+        assert "③ 2車単オッズPDF" in html.text
+        assert "fetch('/analyze'" in html.text
         assert "負けて強し／展開不利" in html.text
         assert "data.selections" in html.text
         assert "data.previous_day" in html.text
