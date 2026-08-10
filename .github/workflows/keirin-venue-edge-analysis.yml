@@ -1,0 +1,57 @@
+name: 全国43競輪場 実測場攻略
+
+on:
+  pull_request:
+    paths:
+      - "historical_pipeline/venue_edge_analysis.py"
+      - ".github/workflows/keirin-venue-edge-analysis.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  venue-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r historical_pipeline/requirements-historical.txt
+      - name: 保存済み2025・2026データセット取得
+        run: |
+          mkdir -p train external
+          gh release download keirin-data-2025 --pattern keirin_2025_dataset.zip
+          gh release download keirin-pr31-frozen-2026-01-02 --pattern keirin_2026_01_02_dataset.zip
+          unzip -q keirin_2025_dataset.zip -d train_unpack
+          unzip -q keirin_2026_01_02_dataset.zip -d external_unpack
+          cp -R train_unpack/dataset/. train/
+          cp -R external_unpack/dataset_2026/. external/
+      - name: 場差の交絡除去・再現性・ROI検証
+        run: |
+          python historical_pipeline/venue_edge_analysis.py \
+            --train-dir train --external-dir external --output-dir venue_analysis \
+            | tee venue_analysis_run.log
+      - name: 結果一覧
+        if: always()
+        run: |
+          echo '--- ROI ---'
+          test -f venue_analysis/venue_roi_comparison.csv && cat venue_analysis/venue_roi_comparison.csv || true
+          echo '--- REPORT ---'
+          test -f venue_analysis/venue_strategy_report.json && cat venue_analysis/venue_strategy_report.json || true
+          echo '--- CARDS ---'
+          test -f venue_analysis/venue_cards.csv && cat venue_analysis/venue_cards.csv || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: keirin-venue-edge-analysis
+          path: |
+            venue_analysis
+            venue_analysis_run.log
+          retention-days: 30
