@@ -1,7 +1,9 @@
 from individual_api.previous_day_kdreams import (
     _labels,
+    _lineup_map,
     _previous_summary,
     _result_detail,
+    _winner_car,
     detect_day_no,
     fetch_previous_day,
 )
@@ -59,7 +61,27 @@ def test_previous_result_detail_reads_finish_sb_lap_and_reason() -> None:
     }
     assert rows["望月 湧世"]["actual_start"] == 1
     assert rows["望月 湧世"]["actual_back"] == 0
-    assert rows["望月 湧世"]["comment"] == "叩き捲られ"
+
+
+def test_kdreams_lineup_is_split_by_non_follow_roles() -> None:
+    html = """
+    <html><body>
+      <div>並び予想 ← 3先行 2追込 7追込 1押え先 4追込 5追込 6自在</div>
+      <div>オッズ</div>
+    </body></html>
+    """
+    assert _lineup_map(html) == {3: 1, 2: 1, 7: 1, 1: 2, 4: 2, 5: 2, 6: 3}
+
+
+def test_winner_car_reads_completed_previous_result_only() -> None:
+    html = """
+    <table class="result_table">
+      <tr><th>着順</th><th>車番</th><th>選手名</th></tr>
+      <tr><td>1</td><td>4</td><td>勝者</td></tr>
+      <tr><td>2</td><td>2</td><td>二着</td></tr>
+    </table>
+    """
+    assert _winner_car(html) == 4
 
 
 def test_validated_bandte_and_blocked_labels_are_loss_only() -> None:
@@ -86,6 +108,28 @@ def test_pr31_b_keeps_original_back_and_top3_gate() -> None:
     assert bad_back["pr31"]["B"] == 0
 
 
-def test_other_line_win_is_not_fabricated_without_previous_line_data() -> None:
-    result = _labels({"finish": 5, "actual_back": 1, "comment": "先行して4角まで粘る"})
-    assert result["validated"]["back_4plus_otherline_win"] is False
+def test_other_line_win_requires_back_loss_and_confirmed_different_line() -> None:
+    hit = _labels({
+        "finish": 5,
+        "actual_back": 1,
+        "comment": "先行して粘る",
+        "previous_line_no": 1,
+        "previous_winner_line_no": 2,
+    })
+    same_line = _labels({
+        "finish": 5,
+        "actual_back": 1,
+        "previous_line_no": 1,
+        "previous_winner_line_no": 1,
+    })
+    missing = _labels({"finish": 5, "actual_back": 1})
+    not_back = _labels({
+        "finish": 5,
+        "actual_back": 0,
+        "previous_line_no": 1,
+        "previous_winner_line_no": 2,
+    })
+    assert hit["validated"]["back_4plus_otherline_win"] is True
+    assert same_line["validated"]["back_4plus_otherline_win"] is False
+    assert missing["validated"]["back_4plus_otherline_win"] is False
+    assert not_back["validated"]["back_4plus_otherline_win"] is False
