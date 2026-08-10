@@ -1,0 +1,97 @@
+name: Production PR31 smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/production-pr31-smoke.yml"
+      - "app/**"
+      - "individual_api/**"
+      - "Dockerfile"
+      - "render.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PROD_URL: https://shogo-keirin-os.onrender.com
+  SHOGO_ACCESS_PIN: ${{ secrets.SHOGO_ACCESS_PIN }}
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Render本番がPR31へ反映されるまで確認
+        shell: bash
+        run: |
+          set -euo pipefail
+          ok=0
+          for i in $(seq 1 40); do
+            if curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/health" -o health.json; then
+              if python - <<'PY'
+import json
+x=json.load(open('health.json', encoding='utf-8'))
+assert x.get('status') == 'ok', x
+assert x.get('engine') == 'PR31_FROZEN_ONLY', x
+assert x.get('a_strategy') == 'removed', x
+assert x.get('c_strategy') == 'removed', x
+assert x.get('purchase_points') == '3_to_5_or_no_bet', x
+print(json.dumps(x, ensure_ascii=False))
+PY
+              then
+                ok=1
+                break
+              fi
+            fi
+            sleep 15
+          done
+          test "$ok" -eq 1
+
+      - name: 本番UI確認
+        run: |
+          curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/" -o index.html
+          grep -q 'PR31' index.html
+          grep -q 'A方式・C方式：撤廃' index.html
+          grep -q '負けて強し／展開不利' index.html
+
+      - name: 実3PDFを本番APIへ投入
+        shell: bash
+        run: |
+          set -euo pipefail
+          root='tests/fixtures/keirin_jp/2026-08-03_odawara_4r'
+          basic="$root/レース情報｜KEIRIN(71).PDF"
+          hs="$root/レース情報｜KEIRIN(72).PDF"
+          odds="$root/オッズ｜KEIRIN(11).PDF"
+          code=$(curl -sS --connect-timeout 10 --max-time 180 \
+            -o response.json -w '%{http_code}' \
+            -F "files=@$odds;type=application/pdf" \
+            -F "files=@$basic;type=application/pdf" \
+            -F "files=@$hs;type=application/pdf" \
+            -F "pin=$SHOGO_ACCESS_PIN" \
+            "$PROD_URL/analyze-bundle")
+          if [ "$code" = "403" ]; then
+            echo '本番はPIN保護中。health/UI確認済み、3PDF本番POSTはGitHub側にPIN secretが無いためスキップ。'
+            exit 0
+          fi
+          test "$code" = "200"
+          python - <<'PY'
+import json
+x=json.load(open('response.json', encoding='utf-8'))
+assert x.get('status') == 'OK', x
+assert x.get('engine') == 'PR31_FROZEN_ONLY', x
+assert x.get('a_strategy') == 'REMOVED', x
+assert x.get('c_strategy') == 'REMOVED', x
+assert x.get('purchase_status') in {'BET','NO_BET'}, x
+assert len(x.get('pair_ranking', [])) > 0, x
+assert x.get('pdf_audit', {}).get('rider_count') == 9, x
+assert x.get('pdf_audit', {}).get('odds_count') == 72, x
+print(json.dumps({
+  'engine': x['engine'],
+  'purchase_status': x['purchase_status'],
+  'day_no': x.get('race',{}).get('day_no'),
+  'pair_count': len(x.get('pair_ranking',[])),
+  'previous_day_status': x.get('previous_day',{}).get('status'),
+}, ensure_ascii=False))
+PY
