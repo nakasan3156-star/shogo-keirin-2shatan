@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -48,14 +49,25 @@ def _norm(value: str) -> str:
 
 
 def detect_day_no(text: str) -> int:
+    """PDF上部の開催日表示を優先し、過去成績欄の『初日』誤検知を避ける。"""
     t = unicodedata.normalize("NFKC", text or "")
-    if "初日" in t:
+    head = "\n".join(t.splitlines()[:35])
+    explicit = re.search(r"(?:^|\n).{0,50}?(初日|最終日|[2-6]日目)(?:\s|$)", head)
+    token = explicit.group(1) if explicit else None
+    if token == "初日":
         return 1
-    m = re.search(r"(\d+)日目", t)
+    if token == "最終日":
+        return 3  # 必要なのは初日か否か。最終日は2以上なら十分。
+    if token and token.endswith("日目"):
+        return int(token[:-2])
+    # ヘッダで取れない場合だけ全体を確認する。数字日を初日より優先する。
+    m = re.search(r"([2-6])日目", t)
     if m:
         return int(m.group(1))
-    if "最終日" in t:
+    if "最終日" in head:
         return 3
+    if "初日" in head:
+        return 1
     return 1
 
 
@@ -74,7 +86,6 @@ def _result_rows(html: str, rider_names: list[str]) -> dict[str, dict[str, Any]]
         headers = [_norm(x.get_text(" ", strip=True)) for x in table.find_all("th")]
         if not headers or not any("着" in h or "順位" in h for h in headers):
             continue
-        name_i = _header_index(headers, ("選手名", "選手"))
         finish_i = _header_index(headers, ("着順", "順位", "着"))
         back_i = _header_index(headers, ("バック", "B"))
         comment_i = _header_index(headers, ("コメント", "短評"))
@@ -97,14 +108,10 @@ def _result_rows(html: str, rider_names: list[str]) -> dict[str, dict[str, Any]]
                         break
             actual_back = 0
             if back_i is not None and back_i < len(cells):
-                actual_back = int(bool(re.search(r"1|B|バック", cells[back_i])))
+                actual_back = int(bool(re.search(r"(?:^|[^0-9])1(?:[^0-9]|$)|B|バック", cells[back_i])))
             comment = cells[comment_i] if comment_i is not None and comment_i < len(cells) else ""
-            found[wanted[match_key]] = {
-                "finish": finish,
-                "actual_back": actual_back,
-                "comment": comment,
-            }
-    # コメントが別表の場合は選手名周辺の本文も補助的に使う。
+            found[wanted[match_key]] = {"finish": finish, "actual_back": actual_back, "comment": comment}
+
     plain = _norm(soup.get_text(" ", strip=True))
     for original in rider_names:
         item = found.setdefault(original, {"finish": None, "actual_back": 0, "comment": ""})
@@ -122,15 +129,33 @@ def _labels(item: dict[str, Any]) -> dict[str, Any]:
     back = int(item.get("actual_back") or 0)
     lost4 = finish is not None and int(finish) >= 4
     pr31 = {k: int(bool(lost4 and re.search(pat, comment))) for k, pat in PR31_PATTERNS.items()}
-    # PR31のBだけは元仕様どおり「長く踏んでB取得かつ3着内」。
     pr31["B"] = int(bool(finish is not None and int(finish) <= 3 and back == 1 and re.search(PR31_PATTERNS["B"], comment)))
     validated = {
         "bandte_fight_4plus": bool(lost4 and re.search(PR31_PATTERNS["C"], comment)),
         "blocked_4plus": bool(lost4 and re.search(PR31_PATTERNS["F"], comment)),
-        # 別線判定には前日ラインが必要。Kドリームス表から確定できない時はFalse固定で創作しない。
+        # 別線勝利は前日ラインを確定できた時だけ有効化する。現取得器では創作しない。
         "back_4plus_otherline_win": False,
     }
     return {"pr31": pr31, "validated": validated}
+
+
+def _fetch_result(url: str, previous_year: str, rider_names: list[str]) -> tuple[str, dict[str, dict[str, Any]]]:
+    try:
+        response = requests.get(
+            url,
+            timeout=(1.2, 1.8),
+            headers={"User-Agent": "Mozilla/5.0 ShogoKeirinOS/PR31"},
+        )
+    except requests.RequestException:
+        return url, {}
+    if response.status_code != 200 or previous_year not in response.text:
+        return url, {}
+    rows = _result_rows(response.text, rider_names)
+    matched = {
+        name: row for name, row in rows.items()
+        if row.get("finish") is not None or row.get("comment")
+    }
+    return url, matched
 
 
 def fetch_previous_day(venue: str | None, race_date: str | None, day_no: int, rider_names: list[str]) -> dict[str, Any]:
@@ -142,44 +167,39 @@ def fetch_previous_day(venue: str | None, race_date: str | None, day_no: int, ri
         current = datetime.strptime(race_date, "%Y-%m-%d")
     except ValueError:
         return {"status": "DATE_INVALID", "source": "KDreams", "riders": {}}
+
     previous = current - timedelta(days=1)
     code, slug = VENUES[venue]
     date_token = previous.strftime("%Y%m%d")
-    session = requests.Session()
-    session.headers.update({"User-Agent": "Mozilla/5.0 ShogoKeirinOS/PR31"})
     merged: dict[str, dict[str, Any]] = {}
-    urls: list[str] = []
-    # 同一場同日に通常は1開催。event sequenceはサイト側の内部番号なので1〜3だけ安全に探索。
+    urls_with_match: list[str] = []
+
+    # seq=1が通常ケース。12Rを並列取得し、見つからない時だけseq=2,3へ進む。
     for seq in range(1, 4):
+        urls = []
         for race_no in range(1, 13):
             race_id = f"{code}{date_token}{seq:02d}{race_no:04d}"
-            url = f"https://keirin.kdreams.jp/{slug}/racedetail/{race_id}/?pageType=result"
-            try:
-                response = session.get(url, timeout=2.5)
-            except requests.RequestException:
-                continue
-            if response.status_code != 200 or previous.strftime("%Y") not in response.text:
-                continue
-            rows = _result_rows(response.text, rider_names)
-            matched = {name: row for name, row in rows.items() if row.get("finish") is not None or row.get("comment")}
-            if not matched:
-                continue
-            urls.append(url)
-            merged.update(matched)
-            if len(merged) >= len(rider_names):
-                break
-        if len(merged) >= len(rider_names):
+            urls.append(f"https://keirin.kdreams.jp/{slug}/racedetail/{race_id}/?pageType=result")
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            futures = [pool.submit(_fetch_result, url, previous.strftime("%Y"), rider_names) for url in urls]
+            for future in as_completed(futures):
+                url, matched = future.result()
+                if not matched:
+                    continue
+                urls_with_match.append(url)
+                merged.update(matched)
+        if merged:
             break
-    out = {}
+
+    out: dict[str, dict[str, Any]] = {}
     for name in rider_names:
         item = merged.get(name)
-        if not item:
-            continue
-        out[name] = {**item, **_labels(item)}
+        if item:
+            out[name] = {**item, **_labels(item)}
     return {
         "status": "OK" if out else "PREVIOUS_DAY_NOT_FOUND",
         "source": "KDreams",
         "previous_date": previous.strftime("%Y-%m-%d"),
-        "urls_checked_with_match": urls,
+        "urls_checked_with_match": sorted(urls_with_match),
         "riders": out,
     }
