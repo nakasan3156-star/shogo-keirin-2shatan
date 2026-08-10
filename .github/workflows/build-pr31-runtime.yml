@@ -6,10 +6,16 @@ on:
       - "historical_pipeline/build_pr31_runtime_bundle.py"
       - "historical_pipeline/chatgpt_baseline_backtest.py"
       - ".github/workflows/build-pr31-runtime.yml"
+  push:
+    branches:
+      - "agent/pr31-lose-strong-api"
+    paths:
+      - "historical_pipeline/build_pr31_runtime_bundle.py"
+      - ".github/workflows/build-pr31-runtime.yml"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   GH_TOKEN: ${{ github.token }}
@@ -32,8 +38,17 @@ jobs:
       - name: PR31を同一条件でFrozen化
         run: |
           python historical_pipeline/build_pr31_runtime_bundle.py --dataset-dir dataset --output pr31_frozen.joblib
+          sha256sum pr31_frozen.joblib | tee pr31_frozen.sha256
       - uses: actions/upload-artifact@v4
         with:
           name: pr31-frozen-runtime
-          path: pr31_frozen.joblib
+          path: |
+            pr31_frozen.joblib
+            pr31_frozen.sha256
           retention-days: 30
+      - name: 固定Releaseへ配布
+        if: github.event_name == 'push'
+        run: |
+          gh release view pr31-runtime-v1 >/dev/null 2>&1 || \
+            gh release create pr31-runtime-v1 --title "PR31 Frozen Runtime v1" --notes "PR #31を2025年固定データ・固定分割で再生成した本番API用モデル。"
+          gh release upload pr31-runtime-v1 pr31_frozen.joblib pr31_frozen.sha256 --clobber
