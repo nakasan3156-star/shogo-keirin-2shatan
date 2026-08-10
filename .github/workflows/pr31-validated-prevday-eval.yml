@@ -1,0 +1,48 @@
+name: PR31 validated previous-day A/B
+
+on:
+  pull_request:
+    paths:
+      - "historical_pipeline/evaluate_pr31_validated_prevday.py"
+      - "individual_api/previous_day_kdreams.py"
+      - "tests/test_pr31_previous_day.py"
+      - ".github/workflows/pr31-validated-prevday-eval.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  evaluate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r historical_pipeline/requirements-historical.txt
+      - name: 2025/2026固定データ取得
+        run: |
+          gh release download keirin-data-2025 --pattern keirin_2025_dataset.zip
+          gh release download keirin-pr31-frozen-2026-01-02 --pattern keirin_2026_01_02_dataset.zip
+          unzip -q keirin_2025_dataset.zip -d train_unpack
+          unzip -q keirin_2026_01_02_dataset.zip -d external_unpack
+          mkdir -p train external
+          cp -R train_unpack/dataset/. train/
+          cp -R external_unpack/dataset_2026/. external/
+      - name: PR31固定 vs 3つ目補正 A/B評価
+        working-directory: historical_pipeline
+        run: |
+          python evaluate_pr31_validated_prevday.py \
+            --train-dir ../train \
+            --external-dir ../external \
+            --output-dir ../validated_prevday_eval
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr31-validated-prevday-eval
+          path: validated_prevday_eval
+          retention-days: 30
