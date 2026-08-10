@@ -1,8 +1,8 @@
 """Kドリームスから同一開催の直前日だけを読み、PR31前日特徴を作る。
 
 現在レースの結果表は解析しない。現在レース出走表に載る「前回出走レースの成績」から
-直前日のレース番号を特定し、その前日レース詳細だけを取得する。
-初日は外部取得しない。取得失敗は本体予測を止めず、未取得として返す。
+直前日のレース番号を特定し、その完了済み前日レース詳細だけを取得する。
+初日は前日評価なし。取得不能時は創作せずPR31を前日特徴なしで継続する。
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ VENUES = {
     "熊本": ("87", "kumamoto"),
 }
 
-# PR #31の定義を一字一句同じ条件に固定する。
+# PR #31の前日分類定義。ここは変更しない。
 PR31_PATTERNS = {
     "A": r"先行争|叩き合|踏み合|叩き叩かれ",
     "B": r"先行|逃げ|突張|カマシ逃げ|ペース駆け|正攻法逃げ",
@@ -46,7 +46,7 @@ PR31_PATTERNS = {
     "I": r"脚余|仕掛け遅|余し|届かず",
 }
 
-# 2025H1→H2→2026-01/02で再現した追加表示用ラベル。PR31へ二重加点はしない。
+# 2025H1→H2→2026-01/02で再現した表示用ラベル。PR31へ二重加点しない。
 VALIDATED_PATTERNS = {
     "bandte_fight_4plus": r"番手飛|競り|競勝|番手奪|競負|競負け",
     "blocked_4plus": r"牽制|進路|詰まり|阻ま|張られ|捌かれ|包ま|コース無|コースなく",
@@ -58,7 +58,7 @@ def _norm(value: str) -> str:
 
 
 def detect_day_no(text: str) -> int:
-    """初日/数字日をPDFヘッダから返す。最終日は0としてKドリームス側で実日数を解決する。"""
+    """明示された初日/数字日だけ確定。最終日・不明は0として実ページで解決する。"""
     t = unicodedata.normalize("NFKC", text or "")
     head = "\n".join(t.splitlines()[:40])
     if re.search(r"(?:^|\n).{0,60}?初日(?:\s|$)", head):
@@ -68,13 +68,7 @@ def detect_day_no(text: str) -> int:
         return int(m.group(1))
     if "最終日" in head:
         return 0
-    # ヘッダ崩れ時だけ全体を見る。数字日を優先する。
-    m = re.search(r"([2-6])日目", t)
-    if m:
-        return int(m.group(1))
-    if "最終日" in t[:3000]:
-        return 0
-    return 1
+    return 0
 
 
 def _fetch_html(url: str) -> str:
@@ -89,8 +83,23 @@ def _fetch_html(url: str) -> str:
     return response.text if response.status_code == 200 else ""
 
 
+def _current_page_matches(html: str, current: datetime, rider_names: list[str]) -> bool:
+    if not html:
+        return False
+    text = _norm(BeautifulSoup(html, "lxml").get_text(" ", strip=True))
+    date_tokens = {
+        current.strftime("%Y年%m月%d日"),
+        current.strftime("%Y/%m/%d"),
+        current.strftime("%Y-%m-%d"),
+    }
+    if not any(_norm(token) in text for token in date_tokens):
+        return False
+    hits = sum(1 for name in rider_names if _norm(name) and _norm(name) in text)
+    return hits >= max(1, min(3, len(rider_names)))
+
+
 def _previous_summary(html: str, rider_names: list[str]) -> dict[str, dict[str, Any]]:
-    """現在レース出走表の『前回出走レースの成績』だけを解析する。現在結果表は触らない。"""
+    """現在出走表の『前回出走レースの成績』だけを読む。現在結果表は対象外。"""
     if not html:
         return {}
     soup = BeautifulSoup(html, "lxml")
@@ -105,7 +114,6 @@ def _previous_summary(html: str, rider_names: list[str]) -> dict[str, dict[str, 
             match_name = next((key for key in wanted if key and key in row), None)
             if not match_name:
                 continue
-            # 例: 望月湧世 ... 初日 11R 8 叩き捲られ 詳細
             m = re.search(
                 r"(初日|[2-6]日目|最終日)(\d{1,2})R(落|失|棄|故|[1-9])([^0-9]{0,80}?)(?:詳細|$)",
                 row,
@@ -125,7 +133,7 @@ def _previous_summary(html: str, rider_names: list[str]) -> dict[str, dict[str, 
 
 
 def _result_detail(html: str, rider_names: list[str]) -> dict[str, dict[str, Any]]:
-    """完了済み前日レースのresult_table相当から着順・S/B・上がり・勝敗因だけを読む。"""
+    """完了済み前日レースから着順・S/B・上がり・勝敗因だけを読む。"""
     if not html:
         return {}
     soup = BeautifulSoup(html, "lxml")
@@ -145,7 +153,6 @@ def _result_detail(html: str, rider_names: list[str]) -> dict[str, dict[str, Any
                 headers = cells
                 break
         if not headers:
-            # Kドリームス標準 result_table の固定列。
             headers = ["予想", "着順", "車番", "選手名", "着差", "上り", "決まり手", "S/B", "勝敗因"]
 
         def idx(*names: str) -> int | None:
@@ -163,11 +170,12 @@ def _result_detail(html: str, rider_names: list[str]) -> dict[str, dict[str, Any
         required = [finish_i, car_i, name_i, lap_i, reason_i]
         if any(i is None for i in required):
             continue
+        max_required = max(int(i) for i in required if i is not None)
         for tr in table.find_all("tr"):
             if tr is header_row:
                 continue
             cells = [_norm(x.get_text(" ", strip=True)) for x in tr.find_all("td", recursive=False)]
-            if len(cells) <= max(int(i) for i in required if i is not None):
+            if len(cells) <= max_required:
                 continue
             cell_name = cells[int(name_i)]
             match_name = next((key for key in wanted if key and key in cell_name), None)
@@ -197,14 +205,13 @@ def _labels(item: dict[str, Any]) -> dict[str, Any]:
     comment = str(item.get("comment") or item.get("short_review") or "")
     back = int(item.get("actual_back") or 0)
     pr31 = {k: int(bool(re.search(pat, comment))) for k, pat in PR31_PATTERNS.items()}
-    # PR31のBだけは「長く踏んでB取得かつ3着内」に限定。
     pr31["B"] = int(bool(pr31["B"] and finish is not None and int(finish) <= 3 and back == 1))
     lost4 = finish is not None and int(finish) >= 4
     validated = {
         key: bool(lost4 and re.search(pat, comment))
         for key, pat in VALIDATED_PATTERNS.items()
     }
-    # 前日ラインを確定できない場合は創作しない。
+    # 3つ目は前日ラインまで確定した時だけ。現時点では創作しない。
     validated["back_4plus_otherline_win"] = False
     return {"pr31": pr31, "validated": validated}
 
@@ -225,35 +232,57 @@ def fetch_previous_day(
     if day_no == 1:
         return {"status": "FIRST_DAY_SKIPPED", "source": "KDreams", "resolved_day_no": 1, "riders": {}}
     if not venue or venue not in VENUES or not race_date or race_no <= 0:
-        return {"status": "IDENTITY_UNAVAILABLE", "source": "KDreams", "resolved_day_no": max(day_no, 1), "riders": {}}
+        return {"status": "IDENTITY_UNAVAILABLE", "source": "KDreams", "resolved_day_no": day_no if day_no >= 1 else 3, "riders": {}}
     try:
         current = datetime.strptime(race_date, "%Y-%m-%d")
     except ValueError:
-        return {"status": "DATE_INVALID", "source": "KDreams", "resolved_day_no": max(day_no, 1), "riders": {}}
+        return {"status": "DATE_INVALID", "source": "KDreams", "resolved_day_no": day_no if day_no >= 1 else 3, "riders": {}}
 
     code, slug = VENUES[venue]
-    candidate_days = [day_no] if day_no >= 2 else [2, 3, 4, 5, 6]
-    best: tuple[int, str, datetime, dict[str, dict[str, Any]]] | None = None
+    candidate_days = [day_no] if day_no >= 2 else [1, 2, 3, 4, 5, 6]
+    resolved_day: int | None = None
+    current_url = ""
+    current_html = ""
+    start: datetime | None = None
     for candidate in candidate_days:
-        current_url, start = _current_race_url(code, slug, current, candidate, race_no)
-        html = _fetch_html(current_url)
-        summary = _previous_summary(html, rider_names)
-        score = len(summary)
-        if score and (best is None or score > len(best[3])):
-            best = (candidate, current_url, start, summary)
-        if score >= max(1, len(rider_names) - 1):
+        url, candidate_start = _current_race_url(code, slug, current, candidate, race_no)
+        html = _fetch_html(url)
+        if _current_page_matches(html, current, rider_names):
+            resolved_day = candidate
+            current_url = url
+            current_html = html
+            start = candidate_start
             break
 
-    if best is None:
+    if resolved_day is None or start is None:
         return {
             "status": "PREVIOUS_DAY_NOT_FOUND",
             "source": "KDreams",
-            "resolved_day_no": max(day_no, 2 if day_no == 0 else day_no),
+            "resolved_day_no": day_no if day_no >= 2 else 3,
             "previous_date": (current - timedelta(days=1)).strftime("%Y-%m-%d"),
             "riders": {},
         }
 
-    resolved_day, current_url, start, summary = best
+    if resolved_day == 1:
+        return {
+            "status": "FIRST_DAY_SKIPPED",
+            "source": "KDreams",
+            "resolved_day_no": 1,
+            "current_race_url": current_url,
+            "riders": {},
+        }
+
+    summary = _previous_summary(current_html, rider_names)
+    if not summary:
+        return {
+            "status": "PREVIOUS_DAY_NOT_FOUND",
+            "source": "KDreams",
+            "resolved_day_no": resolved_day,
+            "current_race_url": current_url,
+            "previous_date": (current - timedelta(days=1)).strftime("%Y-%m-%d"),
+            "riders": {},
+        }
+
     previous_day_no = resolved_day - 1
     previous_urls: dict[int, str] = {}
     for item in summary.values():
@@ -263,10 +292,7 @@ def fetch_previous_day(
 
     detail_by_name: dict[str, dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=min(6, max(1, len(previous_urls)))) as pool:
-        futures = {
-            pool.submit(_fetch_html, url): (race, url)
-            for race, url in previous_urls.items()
-        }
+        futures = {pool.submit(_fetch_html, url): (race, url) for race, url in previous_urls.items()}
         for future in as_completed(futures):
             race, url = futures[future]
             html = future.result()
@@ -280,7 +306,6 @@ def fetch_previous_day(
     for name, base in summary.items():
         detail = detail_by_name.get(name, {})
         item = {**base, **detail}
-        # 詳細の勝敗因が取れない場合のみ走り評をPR31コメントに使う。
         item["comment"] = str(detail.get("comment") or base.get("short_review") or "")
         item.update(_labels(item))
         riders[name] = item
