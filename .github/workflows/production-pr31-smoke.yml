@@ -53,11 +53,29 @@ PY
           test "$ok" -eq 1
 
       - name: 本番UI確認
+        shell: bash
         run: |
-          curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/" -o index.html
-          grep -q 'PR31' index.html
-          grep -q 'A方式・C方式：撤廃' index.html
-          grep -q '負けて強し／展開不利' index.html
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/" -o index.html
+            grep -q 'PR31' index.html
+            grep -q '負けて強し／展開不利' index.html
+            exit 0
+          fi
+          ok=0
+          for i in $(seq 1 40); do
+            if curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/" -o index.html; then
+              if grep -q '① 基本情報PDF' index.html \
+                && grep -q '② H/S・着度数PDF' index.html \
+                && grep -q '③ 2車単オッズPDF' index.html \
+                && ! grep -q 'A方式・C方式：撤廃' index.html; then
+                ok=1
+                break
+              fi
+            fi
+            sleep 15
+          done
+          test "$ok" -eq 1
 
       - name: 実3PDFを本番APIへ投入
         shell: bash
