@@ -9,10 +9,10 @@ from typing import Any
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from individual_api.keirin_ac_strategy_api import VERSION, predict
 from individual_api.keirin_line_runtime_fix import install_line_parser_fix
 from individual_api.keirin_odds_runtime_fix import install_odds_parser_fix
 from individual_api.keirin_pdf_adapter import PdfInputError, _input_error
+from individual_api.pr31_runtime import VERSION, predict_pr31
 
 install_odds_parser_fix()
 
@@ -21,15 +21,9 @@ from .bundle_ui import INDEX_HTML
 
 install_line_parser_fix()
 
-app = FastAPI(title="章悟式∞競輪OS A/C統合API", version=VERSION)
+app = FastAPI(title="章悟式∞競輪OS PR31 API", version=VERSION)
 MAX_PDF_BYTES = 25 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 1024 * 1024
-
-
-def _upload_path(root: Path, upload: UploadFile, label: str) -> Path:
-    """Preserve identity-bearing filenames while stripping client directories."""
-    original = Path(upload.filename or f"{label}.pdf").name.replace("\x00", "")
-    return root / f"{label}__{original}"
 
 
 def _check_pin(pin: str) -> None:
@@ -43,28 +37,16 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "version": VERSION,
-        "model_status": "keirin_jp_resilient_pdf_parse",
-        "upload_mode": "multiple_pdfs_auto_detect",
+        "engine": "PR31_FROZEN_ONLY",
+        "a_strategy": "removed",
+        "c_strategy": "removed",
         "required_roles": ["出走表・基本情報", "着度数・H・S回数", "2車単オッズ"],
-        "selection_method": "real_full_parse_with_safe_fallbacks",
-        "closed_odds": "allowed",
-        "missing_lines": "singleton_fallback",
-        "strategies": {"shogo": 5, "residual": 3},
-        "legacy_health_compatibility_only": True,
-        "active_model_status": "A_and_C_frozen",
-        "active_upload_mode": "keirin_jp_three_pdfs_auto_detect",
-        "active_selection_method": "real_full_parse_strict_same_race",
-        "active_missing_lines": "safe_stop_after_resilient_retry",
-        "active_line_parser": "adaptive_coordinate_and_text",
-        "active_strategies": {
-            "a": "purchase_filter_max_3",
-            "c": "individual_line_scenario_mc100k_then_ev_purchase",
-        },
-        "c_simulations": 100000,
-        "c_seed": 3156,
-        "c_ev_formula": "probability_times_odds",
-        "c_ev_purchase": "enabled_3_to_5_or_no_bet",
-        "residual_b": "removed_from_prediction_path",
+        "upload_mode": "keirin_jp_three_pdfs_auto_detect",
+        "selection_method": "PR31_probability_then_conditional_exacta_then_calibration_then_EV",
+        "previous_day": "day2_or_later_only_KDreams_best_effort",
+        "first_day": "no_previous_day_adjustment",
+        "purchase_points": "3_to_5_or_no_bet",
+        "missing_previous_day": "continue_without_fabrication",
     }
 
 
@@ -77,7 +59,7 @@ async def _run_bundle(files: list[UploadFile]) -> JSONResponse:
     if len(files) != 3:
         raise HTTPException(400, "競輪.jpのPDFを3枚ちょうど追加してください。")
 
-    with tempfile.TemporaryDirectory(prefix="keirin-ac-pdf-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="keirin-pr31-pdf-") as tmp:
         root = Path(tmp)
         saved: list[Path] = []
         hashes: set[bytes] = set()
@@ -108,11 +90,25 @@ async def _run_bundle(files: list[UploadFile]) -> JSONResponse:
         try:
             payload, pdf_audit = normalize_real_bundle(saved, None)
             payload["race_type"] = "MEN"
-            result = predict(payload)
+            basic_name = pdf_audit["selected"]["basic"]
+            basic_path = next(path for path in saved if path.name == basic_name)
+            result = predict_pr31(payload, pdf_audit, basic_path)
             result["pdf_audit"] = pdf_audit
         except PdfInputError as exc:
             result = _input_error(exc)
             result["version"] = VERSION
+        except RuntimeError as exc:
+            code = str(exc)
+            result = {
+                "version": VERSION,
+                "status": "PROCESSING_ERROR",
+                "purchase_status": "NO_BET",
+                "error": {
+                    "code": code if code.startswith("PR31_") else "SAFE_PROCESSING_STOP",
+                    "message": "PR31 Frozenモデルを安全に実行できませんでした。",
+                    "missing": [],
+                },
+            }
         except Exception:
             result = {
                 "version": VERSION,
@@ -120,7 +116,7 @@ async def _run_bundle(files: list[UploadFile]) -> JSONResponse:
                 "purchase_status": "NO_BET",
                 "error": {
                     "code": "SAFE_PROCESSING_STOP",
-                    "message": "PDF解析を安全停止しました。3PDFが同じレースか確認してください。",
+                    "message": "PDF解析またはPR31計算を安全停止しました。3PDFが同じレースか確認してください。",
                     "missing": [],
                 },
             }
