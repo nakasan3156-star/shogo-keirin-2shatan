@@ -69,6 +69,7 @@ PY
           odds="$root/オッズ｜KEIRIN(11).PDF"
           ok=0
           for i in $(seq 1 20); do
+            start=$(date +%s)
             code=$(curl -sS --connect-timeout 10 --max-time 180 \
               -o response.json -w '%{http_code}' \
               -F "files=@$odds;type=application/pdf" \
@@ -76,7 +77,12 @@ PY
               -F "files=@$hs;type=application/pdf" \
               -F "pin=$SHOGO_ACCESS_PIN" \
               "$PROD_URL/analyze-bundle" || true)
-            echo "attempt=$i HTTP_CODE=$code"
+            elapsed=$(( $(date +%s) - start ))
+            echo "attempt=$i HTTP_CODE=$code elapsed=${elapsed}s"
+            if [ -f response.json ]; then
+              head -c 2000 response.json || true
+              echo
+            fi
             if [ "$code" = "403" ]; then
               echo '本番はPIN保護中。health/UI確認済み、GitHub側PIN未設定のため3PDF POSTのみスキップ。'
               exit 0
@@ -109,3 +115,5 @@ PY
             sleep 15
           done
           test "$ok" -eq 1
+
+# final production diagnostic trigger
