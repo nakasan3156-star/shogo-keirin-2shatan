@@ -26,6 +26,12 @@ MAX_PDF_BYTES = 25 * 1024 * 1024
 UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
+def _upload_path(root: Path, upload: UploadFile, label: str) -> Path:
+    """Preserve identity-bearing filenames while stripping client directories."""
+    original = Path(upload.filename or f"{label}.pdf").name.replace("\x00", "")
+    return root / f"{label}__{original}"
+
+
 def _check_pin(pin: str) -> None:
     required = os.getenv("SHOGO_ACCESS_PIN", "").strip()
     if required and pin != required:
