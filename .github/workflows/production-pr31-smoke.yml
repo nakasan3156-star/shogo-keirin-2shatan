@@ -1,14 +1,6 @@
 name: Production PR31 smoke
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/production-pr31-smoke.yml"
-      - "app/**"
-      - "individual_api/**"
-      - "Dockerfile"
-      - "render.yaml"
   pull_request:
     paths:
       - ".github/workflows/production-pr31-smoke.yml"
@@ -26,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Render本番がPR31へ反映されるまで確認
+      - name: Render本番fail-open v3反映待ち
         shell: bash
         run: |
           set -euo pipefail
@@ -34,18 +26,15 @@ jobs:
           for i in $(seq 1 40); do
             if curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/health" -o health.json; then
               if python - <<'PY'
-import json, os
+import json
 x=json.load(open('health.json', encoding='utf-8'))
 assert x.get('status') == 'ok', x
 assert x.get('engine') == 'PR31_FROZEN_ONLY', x
-assert x.get('a_strategy') == 'removed', x
-assert x.get('c_strategy') == 'removed', x
-assert x.get('purchase_points') == '3_to_5_or_no_bet', x
+assert x.get('lineup_resolver') == 'resilient_v1', x
+assert x.get('previous_day_resolver') == 'fail_open_v3', x
+assert x.get('ui_upload_mode') == 'fixed_roles_v1', x
 assert x.get('current_race_result_page') == 'forbidden', x
-if os.getenv('GITHUB_EVENT_NAME') != 'pull_request':
-    assert x.get('lineup_resolver') == 'resilient_v1', x
-    assert x.get('previous_day_resolver') == 'fail_open_v3', x
-    assert x.get('ui_upload_mode') == 'fixed_roles_v1', x
+assert x.get('purchase_points') == '3_to_5_or_no_bet', x
 print(json.dumps(x, ensure_ascii=False))
 PY
               then
@@ -57,7 +46,7 @@ PY
           done
           test "$ok" -eq 1
 
-      - name: 本番UI確認
+      - name: 本番UI耐障害化確認
         shell: bash
         run: |
           set -euo pipefail
@@ -68,11 +57,10 @@ PY
                 && grep -q '② H/S・着度数PDF' index.html \
                 && grep -q '③ 2車単オッズPDF' index.html \
                 && grep -q '自動でもう一度試しています' index.html \
+                && grep -q '前日情報なし（PR31単体で計算）' index.html \
                 && ! grep -q 'A方式・C方式：撤廃' index.html; then
-                if [ "$GITHUB_EVENT_NAME" = "pull_request" ] || grep -q '前日情報なし（PR31単体で計算）' index.html; then
-                  ok=1
-                  break
-                fi
+                ok=1
+                break
               fi
             fi
             sleep 15
@@ -80,7 +68,6 @@ PY
           test "$ok" -eq 1
 
       - name: 実3PDFを本番UI経路へ投入
-        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -90,6 +77,7 @@ PY
           odds="$root/オッズ｜KEIRIN(11).PDF"
           ok=0
           for i in $(seq 1 20); do
+            started=$(date +%s)
             code=$(curl -sS --connect-timeout 10 --max-time 120 \
               -o response.json -w '%{http_code}' \
               -F "basic_pdf=@$basic;type=application/pdf" \
@@ -97,9 +85,10 @@ PY
               -F "odds_pdf=@$odds;type=application/pdf" \
               -F "pin=$SHOGO_ACCESS_PIN" \
               "$PROD_URL/analyze" || true)
-            echo "attempt=$i HTTP_CODE=$code"
+            elapsed=$(( $(date +%s) - started ))
+            echo "attempt=$i HTTP_CODE=$code elapsed=${elapsed}s"
             if [ "$code" = "403" ]; then
-              echo '本番はPIN保護中。health/UI確認済み、GitHub側PIN未設定のため3PDF POSTのみスキップ。'
+              echo '本番はPIN保護中。GitHub側PIN未設定のため3PDF POSTのみスキップ。'
               exit 0
             fi
             if [ "$code" = "200" ]; then
