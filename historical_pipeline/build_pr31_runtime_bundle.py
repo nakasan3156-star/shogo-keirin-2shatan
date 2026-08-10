@@ -9,7 +9,7 @@ import joblib
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 
-from historical_pipeline.chatgpt_baseline_backtest import (
+from chatgpt_baseline_backtest import (
     COMPONENT_END, EVENT_FEATURES, PAIR_END, SEED, VALID_END,
     add_component_predictions, add_prerace_features, attach_market,
     calibrate_pair_prob, category_effects, fit_pair_model, predict_pairs,
@@ -75,7 +75,6 @@ def build(dataset_dir: Path) -> dict:
         "venue": venue,
         "venue_base": venue_base,
         "joint_reliability": joint_rel,
-        # PR #32はPR31を変更せず、この条件で2026-01..02を完全未使用評価した。
         "purchase_rule": {"max_points": 5, "min_ev": 2.0, "min_prob": 0.03, "confidence_max": 1.0},
     }
 
