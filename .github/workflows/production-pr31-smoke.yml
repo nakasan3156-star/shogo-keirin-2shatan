@@ -45,6 +45,7 @@ assert x.get('current_race_result_page') == 'forbidden', x
 if os.getenv('GITHUB_EVENT_NAME') != 'pull_request':
     assert x.get('lineup_resolver') == 'resilient_v1', x
     assert x.get('previous_day_resolver') == 'fail_open_v3', x
+    assert x.get('ui_upload_mode') == 'fixed_roles_v1', x
 print(json.dumps(x, ensure_ascii=False))
 PY
               then
@@ -78,7 +79,8 @@ PY
           done
           test "$ok" -eq 1
 
-      - name: 実3PDFを本番APIへ投入
+      - name: 実3PDFを本番UI経路へ投入
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -88,13 +90,13 @@ PY
           odds="$root/オッズ｜KEIRIN(11).PDF"
           ok=0
           for i in $(seq 1 20); do
-            code=$(curl -sS --connect-timeout 10 --max-time 180 \
+            code=$(curl -sS --connect-timeout 10 --max-time 120 \
               -o response.json -w '%{http_code}' \
-              -F "files=@$odds;type=application/pdf" \
-              -F "files=@$basic;type=application/pdf" \
-              -F "files=@$hs;type=application/pdf" \
+              -F "basic_pdf=@$basic;type=application/pdf" \
+              -F "hs_pdf=@$hs;type=application/pdf" \
+              -F "odds_pdf=@$odds;type=application/pdf" \
               -F "pin=$SHOGO_ACCESS_PIN" \
-              "$PROD_URL/analyze-bundle" || true)
+              "$PROD_URL/analyze" || true)
             echo "attempt=$i HTTP_CODE=$code"
             if [ "$code" = "403" ]; then
               echo '本番はPIN保護中。health/UI確認済み、GitHub側PIN未設定のため3PDF POSTのみスキップ。'
@@ -102,21 +104,22 @@ PY
             fi
             if [ "$code" = "200" ]; then
               if python - <<'PY'
-import json, os
+import json
 x=json.load(open('response.json', encoding='utf-8'))
 assert x.get('status') == 'OK', x
 assert x.get('engine') == 'PR31_FROZEN_ONLY', x
 assert x.get('purchase_status') in {'BET','NO_BET'}, x
 assert len(x.get('pair_ranking', [])) > 0, x
+assert x.get('pdf_audit', {}).get('selection_method') == 'real_named_parse', x
 assert x.get('pdf_audit', {}).get('rider_count') == 9, x
 assert x.get('pdf_audit', {}).get('odds_count') == 72, x
-if os.getenv('GITHUB_EVENT_NAME') != 'pull_request':
-    assert x.get('previous_day', {}).get('status') != 'PREVIOUS_DAY_TIMEOUT', x
+assert x.get('previous_day', {}).get('status') != 'PREVIOUS_DAY_TIMEOUT', x
 print(json.dumps({
   'engine': x['engine'],
   'purchase_status': x['purchase_status'],
   'day_no': x.get('race',{}).get('day_no'),
   'pair_count': len(x.get('pair_ranking',[])),
+  'selection_method': x.get('pdf_audit',{}).get('selection_method'),
   'rider_count': x.get('pdf_audit',{}).get('rider_count'),
   'odds_count': x.get('pdf_audit',{}).get('odds_count'),
   'previous_day_status': x.get('previous_day',{}).get('status'),
@@ -127,6 +130,6 @@ PY
                 break
               fi
             fi
-            sleep 15
+            sleep 10
           done
           test "$ok" -eq 1
