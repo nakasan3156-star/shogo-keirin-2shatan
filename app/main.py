@@ -17,9 +17,11 @@ from individual_api.pr31_runtime import VERSION, predict_pr31
 install_odds_parser_fix()
 
 from individual_api.keirin_real_pdf_adapter import normalize_real_bundle
+from individual_api.error_resilience import install_error_resilience
 from .bundle_ui import INDEX_HTML
 
 install_line_parser_fix()
+install_error_resilience()
 
 app = FastAPI(title="章悟式∞競輪OS PR31 API", version=VERSION)
 MAX_PDF_BYTES = 25 * 1024 * 1024
@@ -48,6 +50,7 @@ def health() -> dict[str, Any]:
         "c_strategy": "removed",
         "required_roles": ["出走表・基本情報", "着度数・H・S回数", "2車単オッズ"],
         "upload_mode": "keirin_jp_three_pdfs_auto_detect",
+        "lineup_resolver": "resilient_v1",
         "selection_method": "PR31_probability_then_conditional_exacta_then_calibration_then_EV",
         "previous_day": "day2_or_later_only_KDreams_best_effort",
         "previous_day_resolver": "safe_odds_parallel_v2",
