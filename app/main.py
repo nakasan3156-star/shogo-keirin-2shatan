@@ -17,6 +17,7 @@ from individual_api.pr31_runtime import VERSION, predict_pr31
 install_odds_parser_fix()
 
 from individual_api.keirin_real_pdf_adapter import normalize_real_bundle
+from individual_api.named_bundle import normalize_named_bundle
 from individual_api.error_resilience import install_error_resilience
 from .bundle_ui import INDEX_HTML
 
@@ -50,10 +51,11 @@ def health() -> dict[str, Any]:
         "c_strategy": "removed",
         "required_roles": ["出走表・基本情報", "着度数・H・S回数", "2車単オッズ"],
         "upload_mode": "keirin_jp_three_pdfs_auto_detect",
+        "ui_upload_mode": "fixed_roles_v1",
         "lineup_resolver": "resilient_v1",
         "selection_method": "PR31_probability_then_conditional_exacta_then_calibration_then_EV",
         "previous_day": "day2_or_later_only_KDreams_best_effort",
-        "previous_day_resolver": "safe_odds_parallel_v2",
+        "previous_day_resolver": "fail_open_v3",
         "current_race_result_page": "forbidden",
         "first_day": "no_previous_day_adjustment",
         "purchase_points": "3_to_5_or_no_bet",
@@ -66,7 +68,7 @@ def home() -> str:
     return INDEX_HTML
 
 
-async def _run_bundle(files: list[UploadFile]) -> JSONResponse:
+async def _run_bundle(files: list[UploadFile], *, named_roles: bool = False) -> JSONResponse:
     if len(files) != 3:
         raise HTTPException(400, "競輪.jpのPDFを3枚ちょうど追加してください。")
 
@@ -99,10 +101,14 @@ async def _run_bundle(files: list[UploadFile]) -> JSONResponse:
             saved.append(path)
 
         try:
-            payload, pdf_audit = normalize_real_bundle(saved, None)
+            if named_roles:
+                payload, pdf_audit = normalize_named_bundle(saved[0], saved[1], saved[2], None)
+                basic_path = saved[0]
+            else:
+                payload, pdf_audit = normalize_real_bundle(saved, None)
+                basic_name = pdf_audit["selected"]["basic"]
+                basic_path = next(path for path in saved if path.name == basic_name)
             payload["race_type"] = "MEN"
-            basic_name = pdf_audit["selected"]["basic"]
-            basic_path = next(path for path in saved if path.name == basic_name)
             result = predict_pr31(payload, pdf_audit, basic_path)
             result["pdf_audit"] = pdf_audit
         except PdfInputError as exc:
@@ -147,11 +153,11 @@ async def analyze_bundle(
 
 
 @app.post("/analyze")
-async def analyze_legacy(
+async def analyze_fixed_roles(
     basic_pdf: UploadFile = File(...),
     hs_pdf: UploadFile = File(...),
     odds_pdf: UploadFile = File(...),
     pin: str = Form(default=""),
 ) -> JSONResponse:
     _check_pin(pin)
-    return await _run_bundle([basic_pdf, hs_pdf, odds_pdf])
+    return await _run_bundle([basic_pdf, hs_pdf, odds_pdf], named_roles=True)
