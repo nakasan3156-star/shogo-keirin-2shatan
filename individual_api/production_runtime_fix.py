@@ -8,6 +8,7 @@ only to identify the previous start, then reads completed previous-day results.
 from __future__ import annotations
 
 import re
+import threading
 import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout, as_completed
@@ -27,6 +28,11 @@ _ORIGINAL_PARSE_LINES = line_runtime.parse_lines_from_pdfs
 _ORIGINAL_PARSE_BASIC = real_adapter.parse_basic_real
 _ORIGINAL_PARSE_HS = real_adapter.parse_hs_real
 _INSTALLED = False
+_HISTORY_TIMEOUT_SECONDS = 8.0
+_HISTORY_CIRCUIT_SECONDS = 120.0
+_HISTORY_CIRCUIT_UNTIL = 0.0
+_HISTORY_CIRCUIT_LOCK = threading.Lock()
+_HISTORY_RESOLVER = "fail_open_v3"
 
 
 @lru_cache(maxsize=24)
@@ -173,7 +179,7 @@ def _fetch_previous_day_safe_fast(
 ) -> dict[str, Any]:
     started = time.monotonic()
     diagnostics: dict[str, Any] = {
-        "resolver": "safe_odds_parallel_v2",
+        "resolver": _HISTORY_RESOLVER,
         "current_result_page_used": False,
     }
 
@@ -232,10 +238,8 @@ def _fetch_previous_day_safe_fast(
             "diagnostics": diagnostics,
         }
 
-    # The odds page normally contains the pre-race 'previous start' table.
     summary = previous_day._previous_summary(current_html, rider_names)
     if not summary:
-        # A second non-result page is allowed as a safe fallback; never use result/showResult.
         yoso_url, _ = _current_info_url(code, slug, current, resolved_day, race_no, "yoso")
         yoso_html = previous_day._fetch_html(yoso_url)
         summary = previous_day._previous_summary(yoso_html, rider_names)
@@ -260,7 +264,6 @@ def _fetch_previous_day_safe_fast(
     for item in summary.values():
         prev_race = int(item["previous_race_no"])
         rid = f"{code}{start.strftime('%Y%m%d')}{previous_day_no:02d}{prev_race:04d}"
-        # Only these completed PREVIOUS-DAY races use a result page.
         urls[prev_race] = f"https://keirin.kdreams.jp/{slug}/racedetail/{rid}/?pageType=result"
 
     detail_by_name: dict[str, dict[str, Any]] = {}
@@ -311,6 +314,44 @@ def _fetch_previous_day_safe_fast(
     }
 
 
+def _history_fallback(day_no: int, stage: str, error_type: str | None = None) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {
+        "resolver": _HISTORY_RESOLVER,
+        "current_result_page_used": False,
+        "stage": stage,
+        "fallback": "continue_pr31_without_previous_day",
+    }
+    if error_type:
+        diagnostics["error_type"] = error_type
+    return {
+        "status": "PREVIOUS_DAY_NOT_FOUND",
+        "source": "KDreams",
+        "resolved_day_no": day_no if day_no >= 1 else 3,
+        "riders": {},
+        "diagnostics": diagnostics,
+    }
+
+
+def _history_circuit_open() -> bool:
+    with _HISTORY_CIRCUIT_LOCK:
+        return time.monotonic() < _HISTORY_CIRCUIT_UNTIL
+
+
+def _open_history_circuit() -> None:
+    global _HISTORY_CIRCUIT_UNTIL
+    with _HISTORY_CIRCUIT_LOCK:
+        _HISTORY_CIRCUIT_UNTIL = max(
+            _HISTORY_CIRCUIT_UNTIL,
+            time.monotonic() + _HISTORY_CIRCUIT_SECONDS,
+        )
+
+
+def _close_history_circuit() -> None:
+    global _HISTORY_CIRCUIT_UNTIL
+    with _HISTORY_CIRCUIT_LOCK:
+        _HISTORY_CIRCUIT_UNTIL = 0.0
+
+
 def _bounded_previous_day(
     venue: str | None,
     race_date: str | None,
@@ -318,7 +359,12 @@ def _bounded_previous_day(
     race_no: int,
     rider_names: list[str],
 ) -> dict[str, Any]:
-    """Bound optional history I/O while allowing the PR31 core to always continue."""
+    """Fail open: optional KDreams I/O can never stop or expose a timeout as prediction failure."""
+    if day_no == 1:
+        return _fetch_previous_day_safe_fast(venue, race_date, day_no, race_no, rider_names)
+    if _history_circuit_open():
+        return _history_fallback(day_no, "circuit_open")
+
     executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pr31-history-bound")
     future = executor.submit(
         _fetch_previous_day_safe_fast,
@@ -329,33 +375,17 @@ def _bounded_previous_day(
         rider_names,
     )
     try:
-        return future.result(timeout=12.0)
+        result = future.result(timeout=_HISTORY_TIMEOUT_SECONDS)
+        if result.get("status") == "OK":
+            _close_history_circuit()
+        return result
     except FutureTimeout:
         future.cancel()
-        return {
-            "status": "PREVIOUS_DAY_TIMEOUT",
-            "source": "KDreams",
-            "resolved_day_no": day_no if day_no >= 1 else 3,
-            "riders": {},
-            "diagnostics": {
-                "resolver": "safe_odds_parallel_v2",
-                "current_result_page_used": False,
-                "stage": "global_timeout",
-            },
-        }
+        _open_history_circuit()
+        return _history_fallback(day_no, "global_timeout_fallback")
     except Exception as exc:
-        return {
-            "status": "PREVIOUS_DAY_NOT_FOUND",
-            "source": "KDreams",
-            "resolved_day_no": day_no if day_no >= 1 else 3,
-            "riders": {},
-            "diagnostics": {
-                "resolver": "safe_odds_parallel_v2",
-                "current_result_page_used": False,
-                "stage": "exception",
-                "error_type": type(exc).__name__,
-            },
-        }
+        _open_history_circuit()
+        return _history_fallback(day_no, "exception_fallback", type(exc).__name__)
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
 
