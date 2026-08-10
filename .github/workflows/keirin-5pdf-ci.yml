@@ -115,11 +115,17 @@ jobs:
             -F "files=@$hs;type=application/pdf" \
             -F "pin=$SHOGO_ACCESS_PIN" \
             "$PROD_URL/analyze-bundle")
+          echo "HTTP_CODE=$code"
           if [ "$code" = "403" ]; then
             echo '本番PIN保護中。health/UIは成功。GitHub側PIN未設定のため3PDF POSTのみスキップ。'
             exit 0
           fi
-          test "$code" = "200"
+          if [ "$code" != "200" ]; then
+            echo '--- response.json ---'
+            cat response.json || true
+            echo
+            exit 1
+          fi
           python - <<'PY'
           import json
           x=json.load(open('response.json', encoding='utf-8'))
