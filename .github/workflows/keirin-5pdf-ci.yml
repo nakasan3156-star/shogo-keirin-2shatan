@@ -145,3 +145,5 @@ jobs:
             'previous_day_status': x.get('previous_day',{}).get('status'),
           }, ensure_ascii=False))
           PY
+
+# trigger: production 502 runtime guard
