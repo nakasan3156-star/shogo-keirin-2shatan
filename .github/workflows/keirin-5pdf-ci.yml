@@ -54,6 +54,9 @@ jobs:
           assert result["engine"] == "PR31_FROZEN_ONLY"
           assert result["a_strategy"] == "removed"
           assert result["c_strategy"] == "removed"
+          assert result["lineup_resolver"] == "resilient_v1"
+          assert result["previous_day_resolver"] == "fail_open_v3"
+          assert result["current_race_result_page"] == "forbidden"
           assert result["selection_method"] == "PR31_probability_then_conditional_exacta_then_calibration_then_EV"
           assert result["previous_day"] == "day2_or_later_only_KDreams_best_effort"
           assert result["first_day"] == "no_previous_day_adjustment"
@@ -145,4 +148,4 @@ jobs:
           }, ensure_ascii=False))
           PY
 
-# trigger: production 502 runtime guard
+# trigger: fail-open-v3 regression guard
