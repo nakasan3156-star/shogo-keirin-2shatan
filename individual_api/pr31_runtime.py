@@ -61,10 +61,7 @@ def _identity(audit: dict[str, Any], text: str) -> tuple[str | None, str | None,
     venue = race.get("venue")
     date = race.get("date")
     race_no = int(race.get("race") or 0)
-    if venue in VENUES:
-        venue_code = VENUES[venue][0]
-    else:
-        venue_code = "00"
+    venue_code = VENUES[venue][0] if venue in VENUES else "00"
     race_id = f"runtime-{date or 'unknown'}-{venue_code}-{race_no}"
     return venue, date, race_no, race_id
 
@@ -76,12 +73,18 @@ def _prior_for(name: str, prior: dict[str, Any]) -> dict[str, float]:
     out["has_previous_day"] = float(bool(row))
     out["prior_finish"] = float(row.get("finish") or 0) if row else 0.0
     out["prior_back"] = float(row.get("actual_back") or 0) if row else 0.0
-    out["prior_start"] = 0.0
-    out["prior_lap_rel"] = 0.0
+    out["prior_start"] = float(row.get("actual_start") or 0) if row else 0.0
+    out["prior_lap_raw"] = float(row.get("final_lap_time") or 0) if row else 0.0
     return out
 
 
-def _feature_frame(payload: dict[str, Any], audit: dict[str, Any], basic_text: str, prior: dict[str, Any]) -> pd.DataFrame:
+def _feature_frame(
+    payload: dict[str, Any],
+    audit: dict[str, Any],
+    basic_text: str,
+    prior: dict[str, Any],
+    day_no: int,
+) -> pd.DataFrame:
     riders = payload["riders"]
     lines = [[int(x) for x in line] for line in payload["lines"]]
     line_lookup: dict[int, tuple[int, int, int]] = {}
@@ -90,7 +93,6 @@ def _feature_frame(payload: dict[str, Any], audit: dict[str, Any], basic_text: s
             line_lookup[bike] = (line_no, pos, len(line))
     venue, date, race_no, race_id = _identity(audit, basic_text)
     date_num = int(str(date).replace("-", "")) if date else 0
-    day_no = detect_day_no(basic_text)
     distance = _distance_from_text(basic_text)
     wind = _wind_from_text(basic_text)
     n = len(riders)
@@ -118,14 +120,22 @@ def _feature_frame(payload: dict[str, Any], audit: dict[str, Any], basic_text: s
         row.update(_prior_for(str(r["name"]), prior))
         rows.append(row)
     f = pd.DataFrame(rows)
+
+    # PR31学習時と同じ: 現在レースに出る各選手の前日上がり平均との差。
+    lap_raw = pd.to_numeric(f.pop("prior_lap_raw"), errors="coerce").replace(0, np.nan)
+    lap_mean = float(lap_raw.mean()) if lap_raw.notna().any() else math.nan
+    f["prior_lap_rel"] = (lap_raw - lap_mean).fillna(0.0) if math.isfinite(lap_mean) else 0.0
+
     g = f.groupby("race_id", sort=False)
     for s, t in (("score", "score_rel"), ("b_count", "b_rel"), ("h_count", "h_rel"), ("escape", "escape_rel"), ("makuri", "makuri_rel"), ("sashi", "sashi_rel"), ("mark", "mark_rel")):
         f[t] = f[s] - g[s].transform("mean")
     for s, t in (("score", "score_rank"), ("b_count", "b_rank"), ("h_count", "h_rank"), ("escape", "escape_rank"), ("makuri", "makuri_rank")):
         f[t] = g[s].rank(method="min", ascending=False)
+
     def top_gap(col: str) -> float:
         z = np.sort(f[col].fillna(0).to_numpy())[::-1]
         return float(z[0] - z[1]) if len(z) > 1 else float(z[0] if len(z) else 0)
+
     f["b_top_gap"] = top_gap("b_count"); f["h_top_gap"] = top_gap("h_count"); f["score_top_gap"] = top_gap("score")
     line = f.groupby(["race_id", "line_no"], sort=False)
     f["line_score"] = line.score.transform("sum"); f["line_b"] = line.b_count.transform("sum"); f["line_h"] = line.h_count.transform("sum")
@@ -136,9 +146,11 @@ def _feature_frame(payload: dict[str, Any], audit: dict[str, Any], basic_text: s
     f["is_self_power"] = (f.line_position.eq(1) | f.b_count.gt(0) | (f.escape + f.makuri).gt(0)).astype(int)
     f["two_line"] = int(len(lines) == 2); f["three_line"] = int(len(lines) == 3); f["fragmented"] = int(len(lines) >= 4)
     leaders = f[f.is_leader.eq(1)]
+
     def leader_gap(col: str) -> float:
         z = np.sort(leaders[col].fillna(0).to_numpy())[::-1]
         return float(z[0] - z[1]) if len(z) > 1 else float(z[0] if len(z) else 0)
+
     f["leader_b_gap"] = leader_gap("b_count"); f["leader_h_gap"] = leader_gap("h_count")
     f["escape_leader_count"] = int((leaders.escape > 0).sum())
     for c in FEATURES:
@@ -197,11 +209,13 @@ def _market(pairs: pd.DataFrame, payload: dict[str, Any], bundle: dict[str, Any]
 def predict_pr31(payload: dict[str, Any], audit: dict[str, Any], basic_path: Path) -> dict[str, Any]:
     bundle = _load_bundle()
     basic_text = _extract_text(basic_path, basic_path.name)
-    venue, race_date, _race_no, race_id = _identity(audit, basic_text)
-    day_no = detect_day_no(basic_text)
+    venue, race_date, race_no, race_id = _identity(audit, basic_text)
+    raw_day_no = detect_day_no(basic_text)
     rider_names = [str(r["name"]) for r in payload["riders"]]
-    prior = fetch_previous_day(venue, race_date, day_no, rider_names)
-    f = _feature_frame(payload, audit, basic_text, prior)
+    prior = fetch_previous_day(venue, race_date, raw_day_no, race_no, rider_names)
+    resolved_day = int(prior.get("resolved_day_no") or 0)
+    day_no = resolved_day if resolved_day >= 1 else (raw_day_no if raw_day_no >= 1 else 3)
+    f = _feature_frame(payload, audit, basic_text, prior, day_no)
     _apply_component_models(f, bundle)
     battle = _battle_probability(f, bundle)
     scenarios = scenario_pair_rows(f, {race_id: battle}, bundle["venue"])
@@ -210,14 +224,29 @@ def predict_pr31(payload: dict[str, Any], audit: dict[str, Any], basic_path: Pat
     rule = bundle["purchase_rule"]
     q = market[(market.ev >= float(rule["min_ev"])) & (market.purchase_probability >= float(rule["min_prob"])) & (market.race_entropy <= float(rule["confidence_max"]))].copy()
     q = q.sort_values(["ev", "calibrated_probability"], ascending=False).head(int(rule["max_points"]))
-    # ユーザー固定運用: 3点未満なら見送り。PR31の確率・EV自体は変更しない。
+    # 運用ルール: 3点未満なら見送り。PR31の確率・EV計算自体には触れない。
     purchase_status = "BET" if len(q) >= 3 else "NO_BET"
     selected = q if purchase_status == "BET" else q.iloc[0:0]
+
+    label_names = {
+        "bandte_fight_4plus": "競り・番手飛ばされ等で4着以下",
+        "blocked_4plus": "牽制・進路・詰まり等で4着以下",
+        "back_4plus_otherline_win": "B取得4着以下で別線1着",
+    }
     prior_riders = []
     for name, item in prior.get("riders", {}).items():
         validated = item.get("validated", {})
-        hits = [k for k, v in validated.items() if v]
-        prior_riders.append({"name": name, "finish": item.get("finish"), "comment": item.get("comment", ""), "validated_patterns": hits})
+        hits = [label_names.get(k, k) for k, v in validated.items() if v]
+        prior_riders.append({
+            "name": name,
+            "finish": item.get("finish"),
+            "actual_start": item.get("actual_start"),
+            "actual_back": item.get("actual_back"),
+            "final_lap_time": item.get("final_lap_time"),
+            "comment": item.get("comment", ""),
+            "short_review": item.get("short_review", ""),
+            "validated_patterns": hits,
+        })
     rider_rows = f.sort_values("car_no")[["car_no", "name", "p_back", "p_win", "p_top2", "p_top3"]].to_dict("records")
     pair_rows = market.sort_values(["ev", "calibrated_probability"], ascending=False).head(15)[["first_car", "second_car", "calibrated_probability", "purchase_probability", "exacta_odds", "ev"]].to_dict("records")
     selections = selected[["first_car", "second_car", "calibrated_probability", "purchase_probability", "exacta_odds", "ev"]].to_dict("records")
@@ -234,9 +263,16 @@ def predict_pr31(payload: dict[str, Any], audit: dict[str, Any], basic_path: Pat
         "pair_ranking": pair_rows,
         "selections": selections,
         "previous_day": {
-            "status": prior.get("status"), "source": prior.get("source"), "previous_date": prior.get("previous_date"),
-            "validated_definition": ["競り・番手飛ばされ等で4着以下", "牽制・進路・詰まり等で4着以下", "B取得4着以下で別線1着（前日ライン確定時のみ）"],
+            "status": prior.get("status"),
+            "source": prior.get("source"),
+            "previous_date": prior.get("previous_date"),
+            "current_race_url": prior.get("current_race_url"),
+            "validated_definition": [
+                "競り・番手飛ばされ等で4着以下",
+                "牽制・進路・詰まり等で4着以下",
+                "B取得4着以下で別線1着（前日ライン確定時のみ）",
+            ],
             "matched_riders": prior_riders,
-            "note": "初日は判定しない。取得不能時は創作せずPR31の前日特徴を未取得として計算。",
+            "note": "初日は判定しない。2日目以降は同一開催の直前日だけ。取得不能時は創作せず前日特徴なしでPR31を計算。",
         },
     }
