@@ -1,15 +1,17 @@
-"""Production performance guards for fixed KEIRIN.JP three-PDF input.
+"""Production guards for fixed KEIRIN.JP three-PDF input.
 
-No PR31 prediction rule, threshold, probability model, EV rule, or betting
-condition is changed. Production accepts the same three KEIRIN.JP PDF roles:
-basic rider info, H/S finish counts, and exacta odds.
+PR31 prediction rules, thresholds, probability models, EV rules and betting
+conditions are never changed here.  The current race result page is never
+requested.  Same-meeting history uses a current KDreams odds/race-info page
+only to identify the previous start, then reads completed previous-day results.
 """
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
@@ -22,7 +24,6 @@ from . import previous_day_kdreams as previous_day
 
 _ORIGINAL_EXTRACT_TEXT = pdf_adapter._extract_text
 _ORIGINAL_PARSE_LINES = line_runtime.parse_lines_from_pdfs
-_ORIGINAL_FETCH_PREVIOUS_DAY = pr31_runtime.fetch_previous_day
 _ORIGINAL_PARSE_BASIC = real_adapter.parse_basic_real
 _ORIGINAL_PARSE_HS = real_adapter.parse_hs_real
 _INSTALLED = False
@@ -38,7 +39,6 @@ def _extract_text_cached(path: str | Path, label: str) -> str:
 
 
 def _role_counts(text: str) -> tuple[int, int]:
-    """Classify KEIRIN.JP race-info PDFs from already extracted text only."""
     basic = 0
     hs = 0
     try:
@@ -111,39 +111,204 @@ def _fast_consensus_lines(
     return _ORIGINAL_PARSE_LINES(unique_paths, bikes)
 
 
-def _resolve_day_parallel(
-    venue: str | None,
-    race_date: str | None,
+def _current_info_url(
+    code: str,
+    slug: str,
+    current: datetime,
+    day_no: int,
+    race_no: int,
+    page_type: str = "odds",
+) -> tuple[str, datetime]:
+    """Build a non-result URL for the race being predicted."""
+    start = current - timedelta(days=day_no - 1)
+    rid = f"{code}{start.strftime('%Y%m%d')}{day_no:02d}{race_no:04d}"
+    return f"https://keirin.kdreams.jp/{slug}/racedetail/{rid}/?pageType={page_type}", start
+
+
+def _find_current_info(
+    code: str,
+    slug: str,
+    current: datetime,
+    day_no: int,
     race_no: int,
     rider_names: list[str],
-) -> int:
-    """Resolve 最終日/unknown day number without six sequential KDreams waits."""
-    if not venue or venue not in previous_day.VENUES or not race_date or race_no <= 0:
-        return 0
+) -> tuple[int, str, str, datetime | None]:
+    """Resolve current day from non-result KDreams pages and retain the HTML."""
+    candidates = [day_no] if day_no >= 2 else list(range(1, 7))
+
+    def fetch_candidate(candidate: int) -> tuple[int, str, str, datetime]:
+        url, start = _current_info_url(code, slug, current, candidate, race_no, "odds")
+        return candidate, url, previous_day._fetch_html(url), start
+
+    if len(candidates) == 1:
+        candidate, url, html, start = fetch_candidate(candidates[0])
+        if previous_day._current_page_matches(html, current, rider_names):
+            return candidate, url, html, start
+        return 0, "", "", None
+
+    pool = ThreadPoolExecutor(max_workers=len(candidates), thread_name_prefix="pr31-day-resolve")
+    futures = [pool.submit(fetch_candidate, candidate) for candidate in candidates]
     try:
-        current = datetime.strptime(race_date, "%Y-%m-%d")
-    except ValueError:
-        return 0
-
-    code, slug = previous_day.VENUES[venue]
-
-    def fetch_candidate(candidate: int) -> tuple[int, str, str]:
-        url, _start = previous_day._current_race_url(code, slug, current, candidate, race_no)
-        return candidate, url, previous_day._fetch_html(url)
-
-    with ThreadPoolExecutor(max_workers=6, thread_name_prefix="pr31-day-resolve") as pool:
-        futures = [pool.submit(fetch_candidate, candidate) for candidate in range(1, 7)]
         for future in as_completed(futures):
             try:
-                candidate, _url, html = future.result()
+                candidate, url, html, start = future.result()
             except Exception:
                 continue
             if previous_day._current_page_matches(html, current, rider_names):
                 for pending in futures:
                     if pending is not future:
                         pending.cancel()
-                return candidate
-    return 0
+                return candidate, url, html, start
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    return 0, "", "", None
+
+
+def _fetch_previous_day_safe_fast(
+    venue: str | None,
+    race_date: str | None,
+    day_no: int,
+    race_no: int,
+    rider_names: list[str],
+) -> dict[str, Any]:
+    started = time.monotonic()
+    diagnostics: dict[str, Any] = {
+        "resolver": "safe_odds_parallel_v2",
+        "current_result_page_used": False,
+    }
+
+    if day_no == 1:
+        return {
+            "status": "FIRST_DAY_SKIPPED",
+            "source": "KDreams",
+            "resolved_day_no": 1,
+            "riders": {},
+            "diagnostics": diagnostics,
+        }
+    if not venue or venue not in previous_day.VENUES or not race_date or race_no <= 0:
+        return {
+            "status": "IDENTITY_UNAVAILABLE",
+            "source": "KDreams",
+            "resolved_day_no": day_no if day_no >= 1 else 3,
+            "riders": {},
+            "diagnostics": diagnostics,
+        }
+    try:
+        current = datetime.strptime(race_date, "%Y-%m-%d")
+    except ValueError:
+        return {
+            "status": "DATE_INVALID",
+            "source": "KDreams",
+            "resolved_day_no": day_no if day_no >= 1 else 3,
+            "riders": {},
+            "diagnostics": diagnostics,
+        }
+
+    code, slug = previous_day.VENUES[venue]
+    resolved_day, current_url, current_html, start = _find_current_info(
+        code, slug, current, day_no, race_no, rider_names
+    )
+    diagnostics["resolve_ms"] = round((time.monotonic() - started) * 1000)
+    if not resolved_day or start is None:
+        diagnostics["stage"] = "current_info_not_found"
+        diagnostics["elapsed_ms"] = round((time.monotonic() - started) * 1000)
+        return {
+            "status": "PREVIOUS_DAY_NOT_FOUND",
+            "source": "KDreams",
+            "resolved_day_no": day_no if day_no >= 2 else 3,
+            "previous_date": (current - timedelta(days=1)).strftime("%Y-%m-%d"),
+            "riders": {},
+            "diagnostics": diagnostics,
+        }
+    if resolved_day == 1:
+        diagnostics["stage"] = "first_day"
+        diagnostics["elapsed_ms"] = round((time.monotonic() - started) * 1000)
+        return {
+            "status": "FIRST_DAY_SKIPPED",
+            "source": "KDreams",
+            "resolved_day_no": 1,
+            "current_info_url": current_url,
+            "riders": {},
+            "diagnostics": diagnostics,
+        }
+
+    # The odds page normally contains the pre-race 'previous start' table.
+    summary = previous_day._previous_summary(current_html, rider_names)
+    if not summary:
+        # A second non-result page is allowed as a safe fallback; never use result/showResult.
+        yoso_url, _ = _current_info_url(code, slug, current, resolved_day, race_no, "yoso")
+        yoso_html = previous_day._fetch_html(yoso_url)
+        summary = previous_day._previous_summary(yoso_html, rider_names)
+        if summary:
+            current_url = yoso_url
+    diagnostics["summary_count"] = len(summary)
+    if not summary:
+        diagnostics["stage"] = "previous_summary_not_found"
+        diagnostics["elapsed_ms"] = round((time.monotonic() - started) * 1000)
+        return {
+            "status": "PREVIOUS_DAY_NOT_FOUND",
+            "source": "KDreams",
+            "resolved_day_no": resolved_day,
+            "current_info_url": current_url,
+            "previous_date": (current - timedelta(days=1)).strftime("%Y-%m-%d"),
+            "riders": {},
+            "diagnostics": diagnostics,
+        }
+
+    previous_day_no = resolved_day - 1
+    urls: dict[int, str] = {}
+    for item in summary.values():
+        prev_race = int(item["previous_race_no"])
+        rid = f"{code}{start.strftime('%Y%m%d')}{previous_day_no:02d}{prev_race:04d}"
+        # Only these completed PREVIOUS-DAY races use a result page.
+        urls[prev_race] = f"https://keirin.kdreams.jp/{slug}/racedetail/{rid}/?pageType=result"
+
+    detail_by_name: dict[str, dict[str, Any]] = {}
+    if urls:
+        with ThreadPoolExecutor(max_workers=min(9, len(urls)), thread_name_prefix="pr31-prev-results") as pool:
+            futures = {pool.submit(previous_day._fetch_html, url): (race, url) for race, url in urls.items()}
+            for future in as_completed(futures):
+                race, url = futures[future]
+                try:
+                    html = future.result()
+                except Exception:
+                    html = ""
+                target_names = [
+                    name for name, item in summary.items()
+                    if int(item["previous_race_no"]) == race
+                ]
+                parsed = previous_day._result_detail(html, target_names)
+                line_map = previous_day._lineup_map(html)
+                winner = previous_day._winner_car(html)
+                winner_line = line_map.get(winner) if winner is not None else None
+                for name, item in parsed.items():
+                    item["previous_detail_url"] = url
+                    item["previous_line_no"] = line_map.get(item.get("car_no"))
+                    item["previous_winner_car"] = winner
+                    item["previous_winner_line_no"] = winner_line
+                    detail_by_name[name] = item
+
+    riders: dict[str, dict[str, Any]] = {}
+    for name, base in summary.items():
+        detail = detail_by_name.get(name, {})
+        item = {**base, **detail}
+        item["comment"] = str(detail.get("comment") or base.get("short_review") or "")
+        item.update(previous_day._labels(item))
+        riders[name] = item
+
+    diagnostics["detail_race_count"] = len(urls)
+    diagnostics["detail_rider_count"] = len(detail_by_name)
+    diagnostics["stage"] = "ok" if riders else "no_riders"
+    diagnostics["elapsed_ms"] = round((time.monotonic() - started) * 1000)
+    return {
+        "status": "OK" if riders else "PREVIOUS_DAY_NOT_FOUND",
+        "source": "KDreams",
+        "resolved_day_no": resolved_day,
+        "current_info_url": current_url,
+        "previous_date": (current - timedelta(days=1)).strftime("%Y-%m-%d"),
+        "riders": riders,
+        "diagnostics": diagnostics,
+    }
 
 
 def _bounded_previous_day(
@@ -153,23 +318,10 @@ def _bounded_previous_day(
     race_no: int,
     rider_names: list[str],
 ) -> dict[str, Any]:
-    """Optional KDreams enrichment must never block the main PR31 prediction."""
-    if day_no == 0:
-        resolved = _resolve_day_parallel(venue, race_date, race_no, rider_names)
-        if resolved >= 1:
-            day_no = resolved
-
-    if day_no == 1:
-        return {
-            "status": "FIRST_DAY_SKIPPED",
-            "source": "KDreams",
-            "resolved_day_no": 1,
-            "riders": {},
-        }
-
-    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pr31-prevday")
+    """Bound optional history I/O while allowing the PR31 core to always continue."""
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="pr31-history-bound")
     future = executor.submit(
-        _ORIGINAL_FETCH_PREVIOUS_DAY,
+        _fetch_previous_day_safe_fast,
         venue,
         race_date,
         day_no,
@@ -177,23 +329,32 @@ def _bounded_previous_day(
         rider_names,
     )
     try:
-        return future.result(timeout=8.0)
+        return future.result(timeout=12.0)
     except FutureTimeout:
         future.cancel()
-        resolved = day_no if day_no >= 1 else 3
         return {
             "status": "PREVIOUS_DAY_TIMEOUT",
             "source": "KDreams",
-            "resolved_day_no": resolved,
+            "resolved_day_no": day_no if day_no >= 1 else 3,
             "riders": {},
+            "diagnostics": {
+                "resolver": "safe_odds_parallel_v2",
+                "current_result_page_used": False,
+                "stage": "global_timeout",
+            },
         }
-    except Exception:
-        resolved = day_no if day_no >= 1 else 3
+    except Exception as exc:
         return {
             "status": "PREVIOUS_DAY_NOT_FOUND",
             "source": "KDreams",
-            "resolved_day_no": resolved,
+            "resolved_day_no": day_no if day_no >= 1 else 3,
             "riders": {},
+            "diagnostics": {
+                "resolver": "safe_odds_parallel_v2",
+                "current_result_page_used": False,
+                "stage": "exception",
+                "error_type": type(exc).__name__,
+            },
         }
     finally:
         executor.shutdown(wait=False, cancel_futures=True)
@@ -211,7 +372,6 @@ def install_production_runtime_fix() -> None:
 
     real_adapter.parse_basic_real = _parse_basic_fixed
     real_adapter.parse_hs_real = _parse_hs_fixed
-
     line_runtime.parse_lines_from_pdfs = _fast_consensus_lines
 
     pr31_runtime.fetch_previous_day = _bounded_previous_day
