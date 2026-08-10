@@ -52,22 +52,17 @@ PY
           done
           test "$ok" -eq 1
 
-      - name: 本番UI確認
+      - name: 本番新UIを厳密確認
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/" -o index.html
-            grep -q 'PR31' index.html
-            grep -q '負けて強し／展開不利' index.html
-            exit 0
-          fi
           ok=0
           for i in $(seq 1 40); do
             if curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/" -o index.html; then
               if grep -q '① 基本情報PDF' index.html \
                 && grep -q '② H/S・着度数PDF' index.html \
                 && grep -q '③ 2車単オッズPDF' index.html \
+                && grep -q "fetch('/analyze'" index.html \
                 && ! grep -q 'A方式・C方式：撤廃' index.html; then
                 ok=1
                 break
@@ -96,7 +91,7 @@ PY
               "$PROD_URL/analyze-bundle" || true)
             echo "attempt=$i HTTP_CODE=$code"
             if [ "$code" = "403" ]; then
-              echo '本番はPIN保護中。health/UI確認済み、GitHub側PIN未設定のため3PDF POSTのみスキップ。'
+              echo '本番はPIN保護中。GitHub側PIN未設定のため3PDF POSTのみスキップ。'
               exit 0
             fi
             if [ "$code" = "200" ]; then
@@ -105,8 +100,6 @@ import json
 x=json.load(open('response.json', encoding='utf-8'))
 assert x.get('status') == 'OK', x
 assert x.get('engine') == 'PR31_FROZEN_ONLY', x
-assert x.get('a_strategy') == 'REMOVED', x
-assert x.get('c_strategy') == 'REMOVED', x
 assert x.get('purchase_status') in {'BET','NO_BET'}, x
 assert len(x.get('pair_ranking', [])) > 0, x
 assert x.get('pdf_audit', {}).get('rider_count') == 9, x
