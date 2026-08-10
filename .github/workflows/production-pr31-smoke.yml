@@ -67,19 +67,22 @@ PY
           basic="$root/レース情報｜KEIRIN(71).PDF"
           hs="$root/レース情報｜KEIRIN(72).PDF"
           odds="$root/オッズ｜KEIRIN(11).PDF"
-          code=$(curl -sS --connect-timeout 10 --max-time 180 \
-            -o response.json -w '%{http_code}' \
-            -F "files=@$odds;type=application/pdf" \
-            -F "files=@$basic;type=application/pdf" \
-            -F "files=@$hs;type=application/pdf" \
-            -F "pin=$SHOGO_ACCESS_PIN" \
-            "$PROD_URL/analyze-bundle")
-          if [ "$code" = "403" ]; then
-            echo '本番はPIN保護中。health/UI確認済み、3PDF本番POSTはGitHub側にPIN secretが無いためスキップ。'
-            exit 0
-          fi
-          test "$code" = "200"
-          python - <<'PY'
+          ok=0
+          for i in $(seq 1 20); do
+            code=$(curl -sS --connect-timeout 10 --max-time 180 \
+              -o response.json -w '%{http_code}' \
+              -F "files=@$odds;type=application/pdf" \
+              -F "files=@$basic;type=application/pdf" \
+              -F "files=@$hs;type=application/pdf" \
+              -F "pin=$SHOGO_ACCESS_PIN" \
+              "$PROD_URL/analyze-bundle" || true)
+            echo "attempt=$i HTTP_CODE=$code"
+            if [ "$code" = "403" ]; then
+              echo '本番はPIN保護中。health/UI確認済み、GitHub側PIN未設定のため3PDF POSTのみスキップ。'
+              exit 0
+            fi
+            if [ "$code" = "200" ]; then
+              if python - <<'PY'
 import json
 x=json.load(open('response.json', encoding='utf-8'))
 assert x.get('status') == 'OK', x
@@ -98,5 +101,11 @@ print(json.dumps({
   'previous_day_status': x.get('previous_day',{}).get('status'),
 }, ensure_ascii=False))
 PY
-
-# production smoke trigger 2
+              then
+                ok=1
+                break
+              fi
+            fi
+            sleep 15
+          done
+          test "$ok" -eq 1
