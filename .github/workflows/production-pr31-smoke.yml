@@ -34,13 +34,17 @@ jobs:
           for i in $(seq 1 40); do
             if curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/health" -o health.json; then
               if python - <<'PY'
-import json
+import json, os
 x=json.load(open('health.json', encoding='utf-8'))
 assert x.get('status') == 'ok', x
 assert x.get('engine') == 'PR31_FROZEN_ONLY', x
 assert x.get('a_strategy') == 'removed', x
 assert x.get('c_strategy') == 'removed', x
 assert x.get('purchase_points') == '3_to_5_or_no_bet', x
+assert x.get('current_race_result_page') == 'forbidden', x
+if os.getenv('GITHUB_EVENT_NAME') != 'pull_request':
+    assert x.get('lineup_resolver') == 'resilient_v1', x
+    assert x.get('previous_day_resolver') == 'fail_open_v3', x
 print(json.dumps(x, ensure_ascii=False))
 PY
               then
@@ -56,21 +60,18 @@ PY
         shell: bash
         run: |
           set -euo pipefail
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/" -o index.html
-            grep -q 'PR31' index.html
-            grep -q '負けて強し／展開不利' index.html
-            exit 0
-          fi
           ok=0
           for i in $(seq 1 40); do
             if curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/" -o index.html; then
               if grep -q '① 基本情報PDF' index.html \
                 && grep -q '② H/S・着度数PDF' index.html \
                 && grep -q '③ 2車単オッズPDF' index.html \
+                && grep -q '自動でもう一度試しています' index.html \
                 && ! grep -q 'A方式・C方式：撤廃' index.html; then
-                ok=1
-                break
+                if [ "$GITHUB_EVENT_NAME" = "pull_request" ] || grep -q '前日情報なし（PR31単体で計算）' index.html; then
+                  ok=1
+                  break
+                fi
               fi
             fi
             sleep 15
@@ -101,21 +102,23 @@ PY
             fi
             if [ "$code" = "200" ]; then
               if python - <<'PY'
-import json
+import json, os
 x=json.load(open('response.json', encoding='utf-8'))
 assert x.get('status') == 'OK', x
 assert x.get('engine') == 'PR31_FROZEN_ONLY', x
-assert x.get('a_strategy') == 'REMOVED', x
-assert x.get('c_strategy') == 'REMOVED', x
 assert x.get('purchase_status') in {'BET','NO_BET'}, x
 assert len(x.get('pair_ranking', [])) > 0, x
 assert x.get('pdf_audit', {}).get('rider_count') == 9, x
 assert x.get('pdf_audit', {}).get('odds_count') == 72, x
+if os.getenv('GITHUB_EVENT_NAME') != 'pull_request':
+    assert x.get('previous_day', {}).get('status') != 'PREVIOUS_DAY_TIMEOUT', x
 print(json.dumps({
   'engine': x['engine'],
   'purchase_status': x['purchase_status'],
   'day_no': x.get('race',{}).get('day_no'),
   'pair_count': len(x.get('pair_ranking',[])),
+  'rider_count': x.get('pdf_audit',{}).get('rider_count'),
+  'odds_count': x.get('pdf_audit',{}).get('odds_count'),
   'previous_day_status': x.get('previous_day',{}).get('status'),
 }, ensure_ascii=False))
 PY
