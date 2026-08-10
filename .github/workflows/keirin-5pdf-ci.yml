@@ -5,8 +5,10 @@ on:
     paths:
       - "app/**"
       - "individual_api/**"
+      - "historical_pipeline/chatgpt_baseline_backtest.py"
       - "tests/**"
       - "requirements.txt"
+      - "Dockerfile"
       - ".github/workflows/keirin-5pdf-ci.yml"
   workflow_dispatch:
 
@@ -17,13 +19,26 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: pip
       - name: Install PDF engine
         run: sudo apt-get update && sudo apt-get install -y poppler-utils
       - run: pip install -r requirements.txt
+      - name: PR31 Frozenモデル取得
+        run: |
+          mkdir -p individual_api/models
+          url="https://github.com/nakasan3156-star/shogo-keirin-2shatan/releases/download/pr31-runtime-v1/pr31_frozen.joblib"
+          for attempt in $(seq 1 20); do
+            if curl -fsSL "$url" -o individual_api/models/pr31_frozen.joblib; then
+              break
+            fi
+            rm -f individual_api/models/pr31_frozen.joblib
+            sleep 15
+          done
+          test -s individual_api/models/pr31_frozen.joblib
+          echo "6aaaa9f1ce13db1e86b91b377997a8580be82948381d69097839a9b5673490e6  individual_api/models/pr31_frozen.joblib" | sha256sum -c -
       - name: Compile
-        run: python -m compileall -q app individual_api
+        run: python -m compileall -q app individual_api historical_pipeline
       - name: Regression tests
         env:
           PYTHONPATH: .:individual_api
@@ -36,14 +51,12 @@ jobs:
           from app.main import health
           result = health()
           assert result["status"] == "ok"
-          assert result["model_status"] == "keirin_jp_resilient_pdf_parse"
-          assert result["selection_method"] == "real_full_parse_with_safe_fallbacks"
-          assert result["closed_odds"] == "allowed"
-          assert result["active_missing_lines"] == "safe_stop_after_resilient_retry"
-          assert result["upload_mode"] == "multiple_pdfs_auto_detect"
-          assert len(result["required_roles"]) == 3
-          assert result["strategies"]["shogo"] == 5
-          assert result["strategies"]["residual"] == 3
-          assert result["c_simulations"] == 100000
+          assert result["engine"] == "PR31_FROZEN_ONLY"
+          assert result["a_strategy"] == "removed"
+          assert result["c_strategy"] == "removed"
+          assert result["selection_method"] == "PR31_probability_then_conditional_exacta_then_calibration_then_EV"
+          assert result["previous_day"] == "day2_or_later_only_KDreams_best_effort"
+          assert result["first_day"] == "no_previous_day_adjustment"
+          assert result["purchase_points"] == "3_to_5_or_no_bet"
           print(result)
           PY

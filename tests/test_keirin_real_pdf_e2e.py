@@ -5,8 +5,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.main import app
-from individual_api.keirin_ac_strategy_api import N_SIMULATIONS, predict
 from individual_api.keirin_real_pdf_adapter import normalize_real_bundle
+from individual_api.pr31_runtime import predict_pr31
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "keirin_jp" / "2026-08-03_odawara_4r"
@@ -15,16 +15,19 @@ HS = FIXTURE_ROOT / "レース情報｜KEIRIN(72).PDF"
 ODDS = FIXTURE_ROOT / "オッズ｜KEIRIN(11).PDF"
 EXPECTED_LINES = [[1, 5], [2], [3, 9, 7], [6], [8, 4]]
 EXPECTED_NAMES = [
-    "梅崎隆介",
-    "星野洋輝",
-    "中井俊亮",
-    "内藤高裕",
-    "山口敦也",
-    "坂本周作",
-    "横関裕樹",
-    "小池千啓",
-    "川口公太朗",
+    "梅崎隆介", "星野洋輝", "中井俊亮", "内藤高裕", "山口敦也",
+    "坂本周作", "横関裕樹", "小池千啓", "川口公太朗",
 ]
+
+
+def _no_network_previous(*_args, **_kwargs) -> dict:
+    return {
+        "status": "PREVIOUS_DAY_NOT_FOUND",
+        "source": "KDreams",
+        "resolved_day_no": 3,
+        "previous_date": "2026-08-02",
+        "riders": {},
+    }
 
 
 def _assert_complete_payload(payload: dict, audit: dict) -> None:
@@ -49,22 +52,25 @@ def _assert_complete_payload(payload: dict, audit: dict) -> None:
     ) == 72
 
 
-def test_real_three_pdf_normalization_and_both_strategies() -> None:
-    # Deliberately use arbitrary upload order; role detection must use content.
+def test_real_three_pdf_normalization_and_pr31(monkeypatch) -> None:
+    monkeypatch.setattr("individual_api.pr31_runtime.fetch_previous_day", _no_network_previous)
     payload, audit = normalize_real_bundle([ODDS, HS, BASIC])
     _assert_complete_payload(payload, audit)
-
     payload["race_type"] = "MEN"
-    result = predict(payload)
+    result = predict_pr31(payload, audit, BASIC)
     assert result["status"] == "OK"
-    assert "a" in result["strategies"]
-    assert "c" in result["strategies"]
-    assert result["strategies"]["a"]["name"] == "A方式"
-    assert result["strategies"]["c"]["simulations"] == N_SIMULATIONS == 100_000
-    assert len(result["strategies"]["c"]["candidates"]) == 6
+    assert result["engine"] == "PR31_FROZEN_ONLY"
+    assert result["a_strategy"] == "REMOVED"
+    assert result["c_strategy"] == "REMOVED"
+    assert result["race"]["day_no"] == 3
+    assert len(result["riders"]) == 9
+    assert len(result["pair_ranking"]) > 0
+    assert all("ev" in item for item in result["pair_ranking"])
+    assert result["previous_day"]["status"] == "PREVIOUS_DAY_NOT_FOUND"
 
 
-def test_real_three_pdf_fastapi_returns_200_and_ui_binds_a_c_results() -> None:
+def test_real_three_pdf_fastapi_returns_200_and_ui_binds_pr31_results(monkeypatch) -> None:
+    monkeypatch.setattr("individual_api.pr31_runtime.fetch_previous_day", _no_network_previous)
     with TestClient(app) as client:
         handles = [ODDS.open("rb"), BASIC.open("rb"), HS.open("rb")]
         try:
@@ -82,24 +88,22 @@ def test_real_three_pdf_fastapi_returns_200_and_ui_binds_a_c_results() -> None:
         assert response.status_code == 200
         body = response.json()
         assert body["status"] == "OK"
-        assert body["purchase_status"] == "NO_BET"
+        assert body["engine"] == "PR31_FROZEN_ONLY"
+        assert body["a_strategy"] == "REMOVED"
+        assert body["c_strategy"] == "REMOVED"
+        assert body["purchase_status"] in {"BET", "NO_BET"}
+        assert body["race"]["day_no"] == 3
         assert body["pdf_audit"]["lines"] == EXPECTED_LINES
         assert body["pdf_audit"]["rider_count"] == 9
         assert body["pdf_audit"]["odds_count"] == 72
-        assert body["strategies"]["c"]["simulations"] == 100_000
-        assert body["strategies"]["c"]["seed"] == 3156
-        assert body["strategies"]["c"]["purchase_status"] == "NO_BET"
-        assert body["strategies"]["c"]["purchase_candidates"] == []
-        assert body["strategies"]["c"]["ev_formula"] == "probability * odds"
-        assert all("ev" in item for item in body["strategies"]["c"]["candidates"])
+        assert body["previous_day"]["status"] == "PREVIOUS_DAY_NOT_FOUND"
+        assert len(body["pair_ranking"]) > 0
+        assert all("ev" in item for item in body["pair_ranking"])
 
         html = client.get("/")
         assert html.status_code == 200
-        assert 'id="aResult"' in html.text
-        assert 'id="cResult"' in html.text
-        assert 'id="decision"' in html.text
-        assert "data.strategies?.a?.candidates" in html.text
-        assert "data.strategies?.c?.candidates" in html.text
-        assert "全2車単確率→最後にオッズで推定EV" in html.text
-        assert "Number(v.ev)" in html.text
-        assert "data.strategies?.c?.purchase_candidates" in html.text
+        assert "PR31" in html.text
+        assert "A方式・C方式：撤廃" in html.text
+        assert "負けて強し／展開不利" in html.text
+        assert "data.selections" in html.text
+        assert "data.previous_day" in html.text

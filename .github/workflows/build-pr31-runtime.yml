@@ -1,0 +1,53 @@
+name: PR31 Frozen API bundle
+
+on:
+  pull_request:
+    paths:
+      - "historical_pipeline/build_pr31_runtime_bundle.py"
+      - "historical_pipeline/chatgpt_baseline_backtest.py"
+      - ".github/workflows/build-pr31-runtime.yml"
+  push:
+    branches:
+      - "agent/pr31-lose-strong-api"
+    paths:
+      - "historical_pipeline/build_pr31_runtime_bundle.py"
+      - ".github/workflows/build-pr31-runtime.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r historical_pipeline/requirements-historical.txt joblib
+      - name: 2025固定データ取得
+        run: |
+          gh release download keirin-data-2025 --pattern keirin_2025_dataset.zip
+          unzip -q keirin_2025_dataset.zip
+      - name: PR31を同一条件でFrozen化
+        run: |
+          python historical_pipeline/build_pr31_runtime_bundle.py --dataset-dir dataset --output pr31_frozen.joblib
+          sha256sum pr31_frozen.joblib | tee pr31_frozen.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr31-frozen-runtime
+          path: |
+            pr31_frozen.joblib
+            pr31_frozen.sha256
+          retention-days: 30
+      - name: 固定Releaseへ配布
+        run: |
+          gh release view pr31-runtime-v1 >/dev/null 2>&1 || \
+            gh release create pr31-runtime-v1 --title "PR31 Frozen Runtime v1" --notes "PR #31を2025年固定データ・固定分割で再生成した本番API用モデル。"
+          gh release upload pr31-runtime-v1 pr31_frozen.joblib pr31_frozen.sha256 --clobber

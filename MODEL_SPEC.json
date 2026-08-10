@@ -1,52 +1,51 @@
 {
-  "name": "章悟式∞競輪OS しょーご式5点＋市場残差3点 API",
-  "version": "1.2.0-dual-strategy",
-  "status": "keirin_jp_5pdf_dual_strategy",
+  "name": "章悟式∞競輪OS PR31 Frozen API",
+  "version": "3.0.0-pr31-frozen",
+  "status": "PR31_FROZEN_ONLY",
   "bet_type": "2車単",
   "race_type": "MEN_ONLY",
-  "input_source": "KEIRIN.JP_ONLY",
-  "inputs": [
-    "KEIRIN.JP 基本情報・並び予想PDF",
-    "KEIRIN.JP 直近成績①PDF",
-    "KEIRIN.JP 直近成績②PDF",
+  "current_race_inputs": [
+    "KEIRIN.JP 基本情報PDF（競走得点・逃・捲・差・マ・B・並び）",
     "KEIRIN.JP 着度数・H・S回数PDF",
     "KEIRIN.JP 2車単オッズPDF"
   ],
-  "optional_inputs": ["EXデータスクリーンショット"],
-  "ability_inputs": {
-    "basic": ["競走得点", "逃", "捲", "差", "マ", "B", "脚質", "ライン"],
-    "recent_short": "直近成績①補正",
-    "recent_detail": "直近成績②補正",
-    "recent_combination": "equal_average",
-    "hs": ["1着", "2着", "3着", "着外", "H", "S"]
-  },
-  "strategies": {
-    "shogo": {
-      "candidate_count": 5,
-      "ability_simulations": 100000,
-      "ranking": "能力確率から算出した保守EV降順"
+  "prediction_engine": {
+    "source": "merged PR #31",
+    "component_train": "2025-01-01..2025-06-30",
+    "pair_train": "2025-07-01..2025-08-31",
+    "calibration_and_purchase_rule": "2025-09-01..2025-10-31",
+    "locked_test": "2025-11-01..2025-12-31",
+    "frozen_external_test": "2026-01-01..2026-02-28",
+    "purchase_rule": {
+      "max_points": 5,
+      "min_ev": 2.0,
+      "min_probability": 0.03,
+      "confidence_max": 1.0
     },
-    "residual": {
-      "candidate_count": 3,
-      "formula": "market * (ability / market) ** lambda",
-      "lambda_default": 0.5,
-      "lambda_range": [0.0, 1.0],
-      "residual_simulations": 100000,
-      "ranking": "残差補正後確率から算出した保守EV降順"
-    }
+    "operation_min_points": 3
   },
-  "odds_input": {
-    "source": "KEIRIN.JP",
-    "requires_all_pairs": true,
-    "post_close_policy": "POST_RACE_SOURCE / NO_BET"
+  "previous_day": {
+    "initial_day": "SKIP",
+    "day2_or_later": "same_meeting_previous_day_only",
+    "source": "KDreams",
+    "fields": [
+      "finish_order",
+      "actual_start_S",
+      "actual_back_B",
+      "final_lap_time",
+      "result_comment"
+    ],
+    "pr31_categories": ["A", "B", "C", "D", "E", "F", "G", "H", "I"],
+    "validated_display_patterns": [
+      "競り・番手飛ばされ等で4着以下",
+      "牽制・進路・詰まり等で4着以下",
+      "B取得4着以下で別線1着（前日ライン確定時のみ）"
+    ],
+    "failure_policy": "取得不能は創作せず前日特徴なしでPR31を継続"
   },
-  "common_candidates_policy": "表示のみ。2方式を混ぜて再計算しない",
+  "removed_strategies": ["A方式", "C方式"],
+  "odds_policy": "確率計算完了後に校正済み確率×検証済み信頼係数×2車単オッズでEV算出",
+  "current_result_policy": "今回レースの結果は予測入力に使用しない",
   "women_policy": "WOMEN_EXCLUDED / NO_BET",
-  "forbidden_prediction_inputs": [
-    "Web自動取得",
-    "レース結果",
-    "レース後データ",
-    "推測による欠損補完"
-  ],
-  "failure_policy": "INPUT_ERROR / NO_BET"
+  "failure_policy": "INPUT_ERROR or PROCESSING_ERROR / NO_BET"
 }
