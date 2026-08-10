@@ -53,7 +53,7 @@ def health() -> dict[str, Any]:
         "lineup_resolver": "resilient_v1",
         "selection_method": "PR31_probability_then_conditional_exacta_then_calibration_then_EV",
         "previous_day": "day2_or_later_only_KDreams_best_effort",
-        "previous_day_resolver": "safe_odds_parallel_v2",
+        "previous_day_resolver": "fail_open_v3",
         "current_race_result_page": "forbidden",
         "first_day": "no_previous_day_adjustment",
         "purchase_points": "3_to_5_or_no_bet",
