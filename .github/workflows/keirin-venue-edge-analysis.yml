@@ -5,6 +5,7 @@ on:
     paths:
       - "historical_pipeline/venue_edge_analysis.py"
       - "historical_pipeline/run_venue_edge_analysis.py"
+      - "historical_pipeline/run_venue_edge_analysis_fast.py"
       - ".github/workflows/keirin-venue-edge-analysis.yml"
   workflow_dispatch:
 
@@ -38,7 +39,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python historical_pipeline/run_venue_edge_analysis.py \
+          python historical_pipeline/run_venue_edge_analysis_fast.py \
             --train-dir train --external-dir external --output-dir venue_analysis \
             | tee venue_analysis_run.log
       - name: 結果一覧
