@@ -50,8 +50,6 @@ def _gap_threshold(gaps: list[float]) -> float | None:
     if low <= 0 or high / low < 1.28:
         return None
 
-    # One-dimensional k-means is scale independent and copes with unequal
-    # counts (for example a two-line race has only one between-line gap).
     left, right = low, high
     for _ in range(20):
         threshold = (left + right) / 2.0
@@ -116,10 +114,7 @@ def _coordinate_candidates(path: Path, bikes: list[int]) -> list[_Candidate]:
                 words = page.extract_words(x_tolerance=2, y_tolerance=2)
                 heights = [float(word.get("height", 0.0)) for word in words if float(word.get("height", 0.0)) > 0]
                 tolerance = max(2.0, min(7.0, (statistics.median(heights) if heights else 10.0) * 0.58))
-                labels = [
-                    word for word in words
-                    if "並び予想" in _normal(str(word.get("text", "")))
-                ]
+                labels = [word for word in words if "並び予想" in _normal(str(word.get("text", "")))]
                 digit_words = [
                     word for word in words
                     if re.fullmatch(r"[1-9]", _normal(str(word.get("text", ""))))
@@ -135,10 +130,7 @@ def _coordinate_candidates(path: Path, bikes: list[int]) -> list[_Candidate]:
                     if not _valid(parsed, bikes):
                         continue
                     row_top = statistics.fmean(float(word["top"]) for word in row)
-                    nearest_label = min(
-                        (abs(row_top - float(label["top"])) for label in labels),
-                        default=float("inf"),
-                    )
+                    nearest_label = min((abs(row_top - float(label["top"])) for label in labels), default=float("inf"))
                     score = 100.0
                     if nearest_label < 180:
                         score += 90.0 - min(nearest_label, 90.0)
@@ -190,7 +182,6 @@ def _layout_candidates(path: Path, bikes: list[int]) -> list[_Candidate]:
 
 
 def _character_candidates(path: Path, bikes: list[int]) -> list[_Candidate]:
-    """Fallback for PDFs whose word extraction merges or breaks number tokens."""
     candidates: list[tuple[float, _Candidate]] = []
     try:
         logging.getLogger("pdfminer").setLevel(logging.ERROR)
@@ -240,7 +231,6 @@ def _text_parse(path: Path, bikes: list[int]) -> list[list[int]] | None:
 
 
 def _candidate_pdfs(path: Path) -> list[Path]:
-    """Compatibility helper; production passes the three paths explicitly."""
     candidates = [path]
     try:
         siblings = sorted(
@@ -258,7 +248,6 @@ def _candidate_pdfs(path: Path) -> list[Path]:
 def parse_lines_from_pdfs(
     paths: Iterable[str | Path], bikes: list[int]
 ) -> tuple[list[list[int]], str, str]:
-    """Parse every selected PDF and return the strongest cross-parser result."""
     unique_paths: list[Path] = []
     for raw_path in paths:
         path = Path(raw_path)
@@ -280,7 +269,6 @@ def parse_lines_from_pdfs(
             attempted,
         )
 
-    # Identical results from different PDFs/methods reinforce one another.
     totals: dict[tuple[tuple[int, ...], ...], int] = {}
     sources: dict[tuple[tuple[int, ...], ...], set[str]] = {}
     best_candidate: dict[tuple[tuple[int, ...], ...], _Candidate] = {}
@@ -290,11 +278,7 @@ def parse_lines_from_pdfs(
         current = best_candidate.get(candidate.lines)
         if current is None or candidate.weight > current.weight:
             best_candidate[candidate.lines] = candidate
-    ranked = sorted(
-        totals,
-        key=lambda lines: (len(sources[lines]), totals[lines]),
-        reverse=True,
-    )
+    ranked = sorted(totals, key=lambda lines: (len(sources[lines]), totals[lines]), reverse=True)
     winner = ranked[0]
     if len(ranked) > 1:
         first_key = (len(sources[winner]), totals[winner])
@@ -330,6 +314,8 @@ def install_line_parser_fix() -> None:
     """Keep legacy adapters on the same strict parser during migration."""
     from . import keirin_pdf_adapter
     from . import keirin_real_pdf_adapter
+    from .production_runtime_fix import install_production_runtime_fix
 
     keirin_pdf_adapter._parse_lines = parse_lines_resilient
     keirin_real_pdf_adapter._parse_lines = parse_lines_resilient
+    install_production_runtime_fix()
