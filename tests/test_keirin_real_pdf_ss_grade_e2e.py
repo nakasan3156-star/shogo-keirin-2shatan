@@ -20,6 +20,16 @@ EXPECTED_NAMES = [
 ]
 
 
+def _no_network_previous(*_args, **_kwargs) -> dict:
+    return {
+        "status": "PREVIOUS_DAY_NOT_FOUND",
+        "source": "KDreams",
+        "resolved_day_no": 3,
+        "previous_date": "2026-08-02",
+        "riders": {},
+    }
+
+
 def _assert_complete_payload(payload: dict, audit: dict) -> None:
     assert audit["race"] == {"venue": "小田原", "date": "2026-08-03", "race": 12}
     assert audit["selected"] == {"basic": BASIC.name, "hs": HS.name, "odds": ODDS.name}
@@ -39,7 +49,8 @@ def _assert_complete_payload(payload: dict, audit: dict) -> None:
     ) == 72
 
 
-def test_ss_grade_real_three_pdf_normalization_and_pr31() -> None:
+def test_ss_grade_real_three_pdf_normalization_and_pr31(monkeypatch) -> None:
+    monkeypatch.setattr("individual_api.pr31_runtime.fetch_previous_day", _no_network_previous)
     payload, audit = normalize_real_bundle([HS, ODDS, BASIC])
     _assert_complete_payload(payload, audit)
     payload["race_type"] = "MEN"
@@ -48,13 +59,15 @@ def test_ss_grade_real_three_pdf_normalization_and_pr31() -> None:
     assert result["engine"] == "PR31_FROZEN_ONLY"
     assert result["a_strategy"] == "REMOVED"
     assert result["c_strategy"] == "REMOVED"
+    assert result["race"]["day_no"] == 3
     assert len(result["riders"]) == 9
     assert len(result["pair_ranking"]) > 0
     assert all("ev" in item for item in result["pair_ranking"])
-    assert result["previous_day"]["status"] == "FIRST_DAY_SKIPPED"
+    assert result["previous_day"]["status"] == "PREVIOUS_DAY_NOT_FOUND"
 
 
-def test_ss_grade_real_three_pdf_fastapi_returns_200_with_pr31() -> None:
+def test_ss_grade_real_three_pdf_fastapi_returns_200_with_pr31(monkeypatch) -> None:
+    monkeypatch.setattr("individual_api.pr31_runtime.fetch_previous_day", _no_network_previous)
     with TestClient(app) as client:
         handles = [ODDS.open("rb"), BASIC.open("rb"), HS.open("rb")]
         try:
@@ -76,9 +89,10 @@ def test_ss_grade_real_three_pdf_fastapi_returns_200_with_pr31() -> None:
     assert body["a_strategy"] == "REMOVED"
     assert body["c_strategy"] == "REMOVED"
     assert body["purchase_status"] in {"BET", "NO_BET"}
+    assert body["race"]["day_no"] == 3
     assert body["pdf_audit"]["rider_count"] == 9
     assert body["pdf_audit"]["odds_count"] == 72
     assert body["pdf_audit"]["lines"] == EXPECTED_LINES
-    assert body["previous_day"]["status"] == "FIRST_DAY_SKIPPED"
+    assert body["previous_day"]["status"] == "PREVIOUS_DAY_NOT_FOUND"
     assert len(body["pair_ranking"]) > 0
     assert all("ev" in item for item in body["pair_ranking"])
