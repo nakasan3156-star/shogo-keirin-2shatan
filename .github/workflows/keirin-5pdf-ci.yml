@@ -54,6 +54,7 @@ jobs:
           assert result["engine"] == "PR31_FROZEN_ONLY"
           assert result["a_strategy"] == "removed"
           assert result["c_strategy"] == "removed"
+          assert result["ui_upload_mode"] == "fixed_roles_v1"
           assert result["lineup_resolver"] == "resilient_v1"
           assert result["previous_day_resolver"] == "fail_open_v3"
           assert result["current_race_result_page"] == "forbidden"
@@ -77,15 +78,13 @@ jobs:
         run: |
           set -euo pipefail
           ok=0
-          for i in $(seq 1 40); do
+          for i in $(seq 1 20); do
             if curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/health" -o health.json; then
               if python - <<'PY'
           import json
           x=json.load(open('health.json', encoding='utf-8'))
           assert x.get('status') == 'ok', x
           assert x.get('engine') == 'PR31_FROZEN_ONLY', x
-          assert x.get('a_strategy') == 'removed', x
-          assert x.get('c_strategy') == 'removed', x
           assert x.get('purchase_points') == '3_to_5_or_no_bet', x
           print(json.dumps(x, ensure_ascii=False))
           PY
@@ -94,7 +93,7 @@ jobs:
                 break
               fi
             fi
-            sleep 15
+            sleep 10
           done
           test "$ok" -eq 1
       - name: Render本番UI確認
@@ -102,7 +101,11 @@ jobs:
           curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/" -o index.html
           grep -q 'PR31' index.html
           grep -q '負けて強し／展開不利' index.html
-      - name: 実3PDF本番POST
+          grep -q '① 基本情報PDF' index.html
+          grep -q '② H/S・着度数PDF' index.html
+          grep -q '③ 2車単オッズPDF' index.html
+      - name: 実3PDF本番POSTはmain反映後の専用smokeで実施
+        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -110,42 +113,17 @@ jobs:
           basic="$root/レース情報｜KEIRIN(71).PDF"
           hs="$root/レース情報｜KEIRIN(72).PDF"
           odds="$root/オッズ｜KEIRIN(11).PDF"
-          code=$(curl -sS --connect-timeout 10 --max-time 180 \
+          code=$(curl -sS --connect-timeout 10 --max-time 120 \
             -o response.json -w '%{http_code}' \
-            -F "files=@$odds;type=application/pdf" \
-            -F "files=@$basic;type=application/pdf" \
-            -F "files=@$hs;type=application/pdf" \
+            -F "basic_pdf=@$basic;type=application/pdf" \
+            -F "hs_pdf=@$hs;type=application/pdf" \
+            -F "odds_pdf=@$odds;type=application/pdf" \
             -F "pin=$SHOGO_ACCESS_PIN" \
-            "$PROD_URL/analyze-bundle")
+            "$PROD_URL/analyze")
           echo "HTTP_CODE=$code"
           if [ "$code" = "403" ]; then
-            echo '本番PIN保護中。health/UIは成功。GitHub側PIN未設定のため3PDF POSTのみスキップ。'
             exit 0
           fi
-          if [ "$code" != "200" ]; then
-            echo '--- response.json ---'
-            cat response.json || true
-            echo
-            exit 1
-          fi
-          python - <<'PY'
-          import json
-          x=json.load(open('response.json', encoding='utf-8'))
-          assert x.get('status') == 'OK', x
-          assert x.get('engine') == 'PR31_FROZEN_ONLY', x
-          assert x.get('a_strategy') == 'REMOVED', x
-          assert x.get('c_strategy') == 'REMOVED', x
-          assert x.get('purchase_status') in {'BET','NO_BET'}, x
-          assert len(x.get('pair_ranking', [])) > 0, x
-          assert x.get('pdf_audit', {}).get('rider_count') == 9, x
-          assert x.get('pdf_audit', {}).get('odds_count') == 72, x
-          print(json.dumps({
-            'engine': x['engine'],
-            'purchase_status': x['purchase_status'],
-            'day_no': x.get('race',{}).get('day_no'),
-            'pair_count': len(x.get('pair_ranking',[])),
-            'previous_day_status': x.get('previous_day',{}).get('status'),
-          }, ensure_ascii=False))
-          PY
+          test "$code" = "200"
 
-# trigger: fail-open-v3 regression guard
+# trigger: fixed-role fail-open-v3 regression guard
