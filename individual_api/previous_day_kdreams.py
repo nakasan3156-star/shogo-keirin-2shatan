@@ -115,7 +115,7 @@ def _previous_summary(html: str, rider_names: list[str]) -> dict[str, dict[str, 
             if not match_name:
                 continue
             m = re.search(
-                r"(初日|[2-6]日目|最終日)(\d{1,2})R(落|失|棄|故|[1-9])([^0-9]{0,80}?)(?:詳細|$)",
+                r"(初日|[2-6]日目|最終日)(\d{1,2})R(落|失|棄|故|[1-9])(.{0,80}?)(?:詳細|$)",
                 row,
             )
             if not m:
