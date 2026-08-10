@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""PR31固定 vs +「B取得4着以下で別線1着」前日補正をA/B評価する。
+"""本番PR31 Frozenそのもの vs +「B取得4着以下で別線1着」をA/B評価する。
 
-重要:
-- PR31のcomponent/event/pair/isotonic/reliabilityはBASEで1回だけ学習・固定する。
-- PLUS_J側ではそれらを一切再学習・再校正しない。
-- 追加するのは2025H1で固定済みの +2.262pp 相当logit bonusだけ。
-- 2025年11-12月と2026年1-2月では閾値・補正量を調整しない。
-- 運用は3〜5点、3点未満は見送り。
+PR31側のcomponent/event/pair/isotonic/reliability/venueは本番Frozen bundleをそのまま使用し、
+PLUS_J側では一切再学習・再校正しない。追加するのは2025H1で固定した+2.262pp相当の
+logit bonusだけ。2025年11-12月と2026年1-2月から補正量・閾値を調整しない。
 """
 from __future__ import annotations
 
@@ -14,10 +11,9 @@ import argparse
 import json
 from pathlib import Path
 
+import joblib
 import numpy as np
 import pandas as pd
-from sklearn.isotonic import IsotonicRegression
-from sklearn.linear_model import LogisticRegression
 
 import chatgpt_baseline_backtest as baseline
 
@@ -41,12 +37,11 @@ def load_period(root: Path, label: str):
 
 
 def prior_j_map(riders: pd.DataFrame, races: pd.DataFrame, results: pd.DataFrame) -> pd.DataFrame:
-    """各現在走に、同一開催直前走の B4+ & 別線勝利ラベルを付与する。"""
+    """同一開催の直前走だけから B取得4着以下＋別線1着 を作る。"""
     pre = riders[["race_id", "player_id", "car_no", "line_no"]].copy()
     race_cols = races[["race_id", "race_date", "start_date", "day_no", "venue_code"]].copy()
     h = pre.merge(race_cols, on="race_id", how="left")
-    fact = results[["race_id", "car_no", "finish_order", "actual_back"]].copy()
-    h = h.merge(fact, on=["race_id", "car_no"], how="left")
+    h = h.merge(results[["race_id", "car_no", "finish_order", "actual_back"]], on=["race_id", "car_no"], how="left")
 
     winners = results.loc[pd.to_numeric(results.finish_order, errors="coerce").eq(1), ["race_id", "car_no"]].copy()
     winners = winners.sort_values(["race_id", "car_no"]).drop_duplicates("race_id")
@@ -63,12 +58,12 @@ def prior_j_map(riders: pd.DataFrame, races: pd.DataFrame, results: pd.DataFrame
         & h.venue_code.eq(h.prev_venue_code)
         & h.race_date.gt(h.prev_race_date)
     )
-    known_lines = h.prev_line_no.notna() & h.prev_winner_line_no.notna()
+    known = h.prev_line_no.notna() & h.prev_winner_line_no.notna()
     h["prior_J"] = (
         same
         & pd.to_numeric(h.prev_actual_back, errors="coerce").eq(1)
         & pd.to_numeric(h.prev_finish_order, errors="coerce").ge(4)
-        & known_lines
+        & known
         & h.prev_line_no.ne(h.prev_winner_line_no)
     ).astype(int)
     return h[["race_id", "car_no", "prior_J"]]
@@ -88,15 +83,16 @@ def prepare_df(riders, races, results):
     return df
 
 
-def apply_frozen_component_predictions(frames, component_models, cats, used_base, add_j: bool):
+def apply_frozen_component_predictions(frames, bundle, add_j: bool):
+    cats = bundle["category_effects"]
+    used = list(bundle["used_prior_categories"])
     for y, raw in (("y_back", "p_back_raw"), ("y_win", "p_win_raw"), ("y_top2", "p_top2_raw"), ("y_top3", "p_top3_raw")):
-        model = component_models[y]
+        model = bundle["component_models"][y]
         for f in frames:
             f[raw] = model.predict_proba(f[baseline.FEATURES].fillna(-99))[:, 1]
-
     for f in frames:
         bonus = np.zeros(len(f))
-        for k in used_base:
+        for k in used:
             lift = float(cats.loc[cats.category.eq(k), "y_top2_lift_pp"].iloc[0]) / 100.0
             bonus += f[f"prior_{k}"].to_numpy() * np.clip(lift, -0.08, 0.08)
         if add_j:
@@ -110,7 +106,34 @@ def apply_frozen_component_predictions(frames, component_models, cats, used_base
         baseline.normalize_by_race(f, "p_top3_raw", "p_top3", 3)
 
 
+def battle_map(frame: pd.DataFrame, bundle) -> dict:
+    events = baseline.race_event_table(frame)
+    if events.empty:
+        return {}
+    events["p_battle"] = bundle["event_model"].predict_proba(events[baseline.EVENT_FEATURES].fillna(0))[:, 1]
+    return dict(zip(events.race_id, events.p_battle))
+
+
+def apply_frozen_market_stack(raw_market: pd.DataFrame, bundle) -> pd.DataFrame:
+    d = raw_market.copy()
+    iso = bundle["isotonic"]
+    d["cal_raw"] = iso.predict(d.pair_probability)
+    d["calibrated_probability"] = d.cal_raw / d.groupby("race_id").cal_raw.transform("sum")
+    return baseline.apply_reliability(d, bundle["joint_reliability"])
+
+
+def market_for(frame, battles, bundle, odds, races, results):
+    if frame.empty:
+        return pd.DataFrame()
+    scenarios = baseline.scenario_pair_rows(frame, battles, bundle["venue"])
+    pairs = baseline.predict_pairs(scenarios, bundle["pair_model"])
+    raw = baseline.attach_market(pairs, odds, races, results)
+    return apply_frozen_market_stack(raw, bundle)
+
+
 def production_bets(market: pd.DataFrame) -> pd.DataFrame:
+    if market.empty:
+        return market.copy()
     q = market[
         (market.ev >= RULE["min_ev"])
         & (market.purchase_probability >= RULE["min_prob"])
@@ -133,19 +156,11 @@ def production_bets(market: pd.DataFrame) -> pd.DataFrame:
 
 def metrics(bets: pd.DataFrame, target_races: int) -> dict:
     if bets.empty:
-        return {
-            "target_races": int(target_races), "purchase_races": 0, "purchase_rate": 0.0,
-            "bets": 0, "avg_points": 0.0, "hits": 0, "race_hit_rate": 0.0,
-            "stake_yen": 0.0, "return_yen": 0.0, "roi": 0.0,
-            "max_losing_streak": 0, "max_drawdown_yen": 0.0,
-            "odds_20pct_worse_roi": 0.0, "largest_hit_removed_roi": 0.0,
-        }
+        return {"target_races": int(target_races), "purchase_races": 0, "purchase_rate": 0.0, "bets": 0, "avg_points": 0.0, "hits": 0, "race_hit_rate": 0.0, "stake_yen": 0.0, "return_yen": 0.0, "roi": 0.0, "max_losing_streak": 0, "max_drawdown_yen": 0.0, "odds_20pct_worse_roi": 0.0, "largest_hit_removed_roi": 0.0}
     purchase_races = int(bets.race_id.nunique())
     stake = float(bets.stake.sum())
     ret = float(bets["return"].sum())
-    race_profit = bets.groupby(["race_date", "race_id"], sort=True).apply(
-        lambda x: float(x["return"].sum() - x.stake.sum()), include_groups=False
-    )
+    race_profit = bets.groupby(["race_date", "race_id"], sort=True).apply(lambda x: float(x["return"].sum() - x.stake.sum()), include_groups=False)
     streak = mx = 0
     for loss in race_profit.lt(0):
         streak = streak + 1 if loss else 0
@@ -166,57 +181,28 @@ def metrics(bets: pd.DataFrame, target_races: int) -> dict:
     }
 
 
-def frozen_calibrate_and_reliability(valid_market: pd.DataFrame):
-    iso = IsotonicRegression(out_of_bounds="clip", y_min=1e-6, y_max=.95).fit(
-        valid_market.pair_probability, valid_market.is_hit
-    )
-    valid_market = valid_market.copy()
-    valid_market["cal_raw"] = iso.predict(valid_market.pair_probability)
-    valid_market["calibrated_probability"] = (
-        valid_market.cal_raw / valid_market.groupby("race_id").cal_raw.transform("sum")
-    )
-    _, _, joint = baseline.reliability_tables(valid_market)
-    return iso, joint
-
-
-def apply_frozen_market_stack(market: pd.DataFrame, iso, joint) -> pd.DataFrame:
-    d = market.copy()
-    d["cal_raw"] = iso.predict(d.pair_probability)
-    d["calibrated_probability"] = d.cal_raw / d.groupby("race_id").cal_raw.transform("sum")
-    return baseline.apply_reliability(d, joint)
-
-
-def market_for(frame, battle_map, venue, pair_model, odds, races, results, iso, joint):
-    scenarios = baseline.scenario_pair_rows(frame, battle_map, venue)
-    pairs = baseline.predict_pairs(scenarios, pair_model)
-    raw_market = baseline.attach_market(pairs, odds, races, results)
-    return apply_frozen_market_stack(raw_market, iso, joint)
-
-
-def report_for(name, test_frame, ext_frame, test_market, ext_market):
-    bets25 = production_bets(test_market)
-    bets26 = production_bets(ext_market)
-    day2_ids25 = set(test_frame.loc[test_frame.day_no.gt(1), "race_id"])
-    day2_ids26 = set(ext_frame.loc[ext_frame.day_no.gt(1), "race_id"])
+def report_for(name, full_frame, market):
+    bets = production_bets(market)
+    day2_ids = set(full_frame.loc[full_frame.day_no.gt(1), "race_id"])
     return {
         "name": name,
-        "2025_test": metrics(bets25, int(test_frame.race_id.nunique())),
-        "2025_test_day2plus": metrics(bets25[bets25.race_id.isin(day2_ids25)].copy(), len(day2_ids25)),
-        "2026_external": metrics(bets26, int(ext_frame.race_id.nunique())),
-        "2026_external_day2plus": metrics(bets26[bets26.race_id.isin(day2_ids26)].copy(), len(day2_ids26)),
-    }, bets25, bets26
+        "all": metrics(bets, int(full_frame.race_id.nunique())),
+        "day2plus": metrics(bets[bets.race_id.isin(day2_ids)].copy(), len(day2_ids)),
+    }, bets
 
 
-def promotion_gate(base: dict, plus: dict) -> dict:
-    periods = ["2025_test", "2026_external"]
-    no_large_roi_drop = all(plus[p]["roi"] >= base[p]["roi"] * 0.95 for p in periods)
-    no_large_dd_worse = all(plus[p]["max_drawdown_yen"] <= base[p]["max_drawdown_yen"] * 1.10 + 100 for p in periods)
-    no_streak_worse = all(plus[p]["max_losing_streak"] <= base[p]["max_losing_streak"] + 2 for p in periods)
-    robust_not_worse = all(plus[p]["largest_hit_removed_roi"] >= base[p]["largest_hit_removed_roi"] * 0.95 for p in periods)
-    base_stake = sum(base[p]["stake_yen"] for p in periods)
-    plus_stake = sum(plus[p]["stake_yen"] for p in periods)
-    base_combined = sum(base[p]["return_yen"] for p in periods) / base_stake if base_stake else 0.0
-    plus_combined = sum(plus[p]["return_yen"] for p in periods) / plus_stake if plus_stake else 0.0
+def promotion_gate(base25, plus25, base26, plus26):
+    pairs = ((base25["all"], plus25["all"]), (base26["all"], plus26["all"]))
+    no_large_roi_drop = all(p["roi"] >= b["roi"] * 0.95 for b, p in pairs)
+    no_large_dd_worse = all(p["max_drawdown_yen"] <= b["max_drawdown_yen"] * 1.10 + 100 for b, p in pairs)
+    no_streak_worse = all(p["max_losing_streak"] <= b["max_losing_streak"] + 2 for b, p in pairs)
+    robust_not_worse = all(p["largest_hit_removed_roi"] >= b["largest_hit_removed_roi"] * 0.95 for b, p in pairs)
+    base_stake = base25["all"]["stake_yen"] + base26["all"]["stake_yen"]
+    plus_stake = plus25["all"]["stake_yen"] + plus26["all"]["stake_yen"]
+    base_ret = base25["all"]["return_yen"] + base26["all"]["return_yen"]
+    plus_ret = plus25["all"]["return_yen"] + plus26["all"]["return_yen"]
+    base_combined = base_ret / base_stake if base_stake else 0.0
+    plus_combined = plus_ret / plus_stake if plus_stake else 0.0
     passed = bool(no_large_roi_drop and no_large_dd_worse and no_streak_worse and robust_not_worse and plus_combined > base_combined)
     return {
         "passed": passed,
@@ -233,14 +219,24 @@ def promotion_gate(base: dict, plus: dict) -> dict:
     }
 
 
+def combine_with_affected(base_market, affected_market, affected_ids):
+    if not affected_ids:
+        return base_market.copy()
+    return pd.concat([base_market[~base_market.race_id.isin(affected_ids)], affected_market], ignore_index=True)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--train-dir", required=True)
     ap.add_argument("--external-dir", required=True)
+    ap.add_argument("--model", required=True)
     ap.add_argument("--output-dir", default="validated_prevday_eval")
     args = ap.parse_args()
-    out = Path(args.output_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    out = Path(args.output_dir); out.mkdir(parents=True, exist_ok=True)
+
+    bundle = joblib.load(args.model)
+    if bundle.get("bundle_version") != "pr31-frozen-1":
+        raise RuntimeError("PR31_FROZEN_MODEL_VERSION_MISMATCH")
 
     races25, riders25, results25, odds25 = load_period(Path(args.train_dir), "2025")
     races26, riders26, results26, odds26 = load_period(Path(args.external_dir), "2026_01_02")
@@ -254,101 +250,57 @@ def main():
     riders_all = pd.concat([riders25, riders26], ignore_index=True, sort=False)
     results_all = pd.concat([results25, results26], ignore_index=True, sort=False)
     df = prepare_df(riders_all, races_all, results_all)
-
-    component0 = df[df.race_date.le(baseline.COMPONENT_END)].copy()
-    pair0 = df[df.race_date.gt(baseline.COMPONENT_END) & df.race_date.le(baseline.PAIR_END)].copy()
-    valid0 = df[df.race_date.gt(baseline.PAIR_END) & df.race_date.le(baseline.VALID_END)].copy()
     test0 = df[df.race_date.ge(baseline.TEST_START) & df.race_date.le(20251231)].copy()
     ext0 = df[df.race_date.between(EXTERNAL_START, EXTERNAL_END)].copy()
 
-    # PR31 frozen component stack: one fit only.
-    component_b, pair_b, valid_b, test_b, ext_b = [x.copy() for x in (component0, pair0, valid0, test0, ext0)]
-    cats, _ = baseline.category_effects(component_b)
-    component_models, used_base = baseline.add_component_predictions(
-        [component_b, pair_b, valid_b, test_b, ext_b], component_b, cats
-    )
+    test_b, ext_b = test0.copy(), ext0.copy()
+    apply_frozen_component_predictions([test_b, ext_b], bundle, add_j=False)
+    battles25 = battle_map(test_b, bundle)
+    battles26 = battle_map(ext_b, bundle)
+    base_market25 = market_for(test_b, battles25, bundle, odds25, races25, results25)
+    base_market26 = market_for(ext_b, battles26, bundle, odds26, races26, results26)
 
-    # PLUS_J uses exactly the same trained component models and base A-I effects.
-    test_j, ext_j = test0.copy(), ext0.copy()
-    apply_frozen_component_predictions([test_j, ext_j], component_models, cats, used_base, add_j=True)
+    affected25 = set(test0.loc[test0.prior_J.eq(1), "race_id"])
+    affected26 = set(ext0.loc[ext0.prior_J.eq(1), "race_id"])
+    test_j = test0[test0.race_id.isin(affected25)].copy()
+    ext_j = ext0[ext0.race_id.isin(affected26)].copy()
+    apply_frozen_component_predictions([test_j, ext_j], bundle, add_j=True)
+    plus_aff25 = market_for(test_j, {k: v for k, v in battles25.items() if k in affected25}, bundle, odds25, races25, results25) if affected25 else pd.DataFrame()
+    plus_aff26 = market_for(ext_j, {k: v for k, v in battles26.items() if k in affected26}, bundle, odds26, races26, results26) if affected26 else pd.DataFrame()
+    plus_market25 = combine_with_affected(base_market25, plus_aff25, affected25)
+    plus_market26 = combine_with_affected(base_market26, plus_aff26, affected26)
 
-    events = baseline.race_event_table(df)
-    event_train = events[events.race_date.le(baseline.COMPONENT_END)]
-    event_model = LogisticRegression(max_iter=500, class_weight="balanced", random_state=baseline.SEED).fit(
-        event_train[baseline.EVENT_FEATURES].fillna(0), event_train.early_battle_label
-    )
-    venue, _ = baseline.venue_tables(component_b)
-
-    # PR31 frozen pair model: fit once on BASE pair period only.
-    battle_maps = {}
-    for key, frame in (("pair", pair_b), ("valid", valid_b), ("test", test_b), ("external", ext_b)):
-        e = events[events.race_id.isin(frame.race_id.unique())].copy()
-        e["p_battle"] = event_model.predict_proba(e[baseline.EVENT_FEATURES].fillna(0))[:, 1]
-        battle_maps[key] = dict(zip(e.race_id, e.p_battle))
-
-    pair_model = baseline.fit_pair_model(
-        baseline.scenario_pair_rows(pair_b, battle_maps["pair"], venue), results25
-    )
-
-    # PR31 frozen calibration/reliability: fit once on BASE validation only.
-    valid_pairs = baseline.predict_pairs(
-        baseline.scenario_pair_rows(valid_b, battle_maps["valid"], venue), pair_model
-    )
-    valid_market_raw = baseline.attach_market(valid_pairs, odds25, races25, results25)
-    iso, joint = frozen_calibrate_and_reliability(valid_market_raw)
-
-    base_test_market = market_for(test_b, battle_maps["test"], venue, pair_model, odds25, races25, results25, iso, joint)
-    base_ext_market = market_for(ext_b, battle_maps["external"], venue, pair_model, odds26, races26, results26, iso, joint)
-    plus_test_market = market_for(test_j, battle_maps["test"], venue, pair_model, odds25, races25, results25, iso, joint)
-    plus_ext_market = market_for(ext_j, battle_maps["external"], venue, pair_model, odds26, races26, results26, iso, joint)
-
-    base_report, base25, base26 = report_for("PR31_FROZEN", test_b, ext_b, base_test_market, base_ext_market)
-    plus_report, plus25, plus26 = report_for("PR31_PLUS_J", test_j, ext_j, plus_test_market, plus_ext_market)
-    gate = promotion_gate(base_report, plus_report)
-
-    j_counts = {}
-    for name, frame in (
-        ("2025H1", component0),
-        ("2025JulOct", pd.concat([pair0, valid0], ignore_index=True)),
-        ("2025NovDec", test0),
-        ("2026JanFeb", ext0),
-    ):
-        m = frame.prior_J.eq(1)
-        j_counts[name] = {"rows": int(m.sum()), "races": int(frame.loc[m, "race_id"].nunique())}
+    base25, base_bets25 = report_for("PR31_FROZEN", test0, base_market25)
+    plus25, plus_bets25 = report_for("PR31_PLUS_J", test0, plus_market25)
+    base26, base_bets26 = report_for("PR31_FROZEN", ext0, base_market26)
+    plus26, plus_bets26 = report_for("PR31_PLUS_J", ext0, plus_market26)
+    gate = promotion_gate(base25, plus25, base26, plus26)
 
     report = {
         "execution": "Python actual run",
-        "variant": "B取得4着以下で別線1着 only; PR31 frozen stack unchanged",
-        "bonus_source": {
-            "period": "2025H1 discovery",
-            "top2_residual_pp": J_DISCOVERY_TOP2_RESIDUAL_PP,
-            "logit_bonus": J_LOGIT_BONUS,
-        },
+        "model_source": "production pr31-runtime-v1/pr31_frozen.joblib",
+        "variant": "B取得4着以下で別線1着 only; PR31 Frozen stack unchanged",
+        "bonus_source": {"period": "2025H1 discovery", "top2_residual_pp": J_DISCOVERY_TOP2_RESIDUAL_PP, "logit_bonus": J_LOGIT_BONUS},
         "rule": RULE,
-        "used_prior_categories_base": used_base,
-        "j_counts": j_counts,
-        "base": base_report,
-        "plus_j": plus_report,
+        "used_prior_categories_base": list(bundle["used_prior_categories"]),
+        "affected_races": {"2025NovDec": len(affected25), "2026JanFeb": len(affected26)},
+        "base": {"2025_test": base25, "2026_external": base26},
+        "plus_j": {"2025_test": plus25, "2026_external": plus26},
         "promotion_gate": gate,
         "external_tuning": False,
-        "frozen_stack": {
-            "component_models_shared": True,
-            "event_model_shared": True,
-            "pair_model_shared": True,
-            "isotonic_shared": True,
-            "reliability_shared": True,
-        },
+        "frozen_stack": {"component_models_shared": True, "event_model_shared": True, "pair_model_shared": True, "isotonic_shared": True, "reliability_shared": True, "venue_shared": True},
     }
     (out / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     rows = []
-    for model_name, model_report in (("base", base_report), ("plus_j", plus_report)):
-        for p in ("2025_test", "2025_test_day2plus", "2026_external", "2026_external_day2plus"):
-            rows.append({"model": model_name, "period": p, **model_report[p]})
+    for model_name, y25, y26 in (("base", base25, base26), ("plus_j", plus25, plus26)):
+        for period, r in (("2025_test", y25), ("2026_external", y26)):
+            rows.append({"model": model_name, "period": period, "scope": "all", **r["all"]})
+            rows.append({"model": model_name, "period": period, "scope": "day2plus", **r["day2plus"]})
     pd.DataFrame(rows).to_csv(out / "metrics.csv", index=False, encoding="utf-8-sig")
-    base25.to_csv(out / "base_bets_2025_test.csv", index=False)
-    plus25.to_csv(out / "plus_j_bets_2025_test.csv", index=False)
-    base26.to_csv(out / "base_bets_2026_external.csv", index=False)
-    plus26.to_csv(out / "plus_j_bets_2026_external.csv", index=False)
+    base_bets25.to_csv(out / "base_bets_2025_test.csv", index=False)
+    plus_bets25.to_csv(out / "plus_j_bets_2025_test.csv", index=False)
+    base_bets26.to_csv(out / "base_bets_2026_external.csv", index=False)
+    plus_bets26.to_csv(out / "plus_j_bets_2026_external.csv", index=False)
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
