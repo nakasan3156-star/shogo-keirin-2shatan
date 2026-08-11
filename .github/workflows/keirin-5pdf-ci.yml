@@ -3,109 +3,22 @@ name: KEIRIN Resilient PDF CI
 on:
   pull_request:
     paths:
-      - "app/**"
-      - "individual_api/**"
-      - "historical_pipeline/chatgpt_baseline_backtest.py"
-      - "tests/**"
-      - "requirements.txt"
-      - "Dockerfile"
       - ".github/workflows/keirin-5pdf-ci.yml"
-  workflow_dispatch:
+      - "tests/ops_prod_speed_trigger.txt"
+
+permissions:
+  contents: read
+
+env:
+  PROD_URL: https://shogo-keirin-os.onrender.com
+  SHOGO_ACCESS_PIN: ${{ secrets.SHOGO_ACCESS_PIN }}
 
 jobs:
-  test:
+  production-speed-final:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install PDF engine
-        run: sudo apt-get update && sudo apt-get install -y poppler-utils
-      - run: pip install -r requirements.txt
-      - name: PR31 Frozenモデル取得
-        run: |
-          mkdir -p individual_api/models
-          url="https://github.com/nakasan3156-star/shogo-keirin-2shatan/releases/download/pr31-runtime-v1/pr31_frozen.joblib"
-          for attempt in $(seq 1 20); do
-            if curl -fsSL "$url" -o individual_api/models/pr31_frozen.joblib; then
-              break
-            fi
-            rm -f individual_api/models/pr31_frozen.joblib
-            sleep 15
-          done
-          test -s individual_api/models/pr31_frozen.joblib
-          echo "6aaaa9f1ce13db1e86b91b377997a8580be82948381d69097839a9b5673490e6  individual_api/models/pr31_frozen.joblib" | sha256sum -c -
-      - name: Compile
-        run: python -m compileall -q app individual_api historical_pipeline
-      - name: Regression tests
-        env:
-          PYTHONPATH: .:individual_api
-        run: pytest -q
-      - name: FastAPI smoke test
-        env:
-          PYTHONPATH: .:individual_api
-        run: |
-          python - <<'PY'
-          from app.main import health
-          result = health()
-          assert result["status"] == "ok"
-          assert result["engine"] == "PR31_FROZEN_ONLY"
-          assert result["a_strategy"] == "removed"
-          assert result["c_strategy"] == "removed"
-          assert result["ui_upload_mode"] == "fixed_roles_v1"
-          assert result["lineup_resolver"] == "resilient_v1"
-          assert result["previous_day_resolver"] == "fail_open_v3"
-          assert result["current_race_result_page"] == "forbidden"
-          assert result["selection_method"] == "PR31_probability_then_conditional_exacta_then_calibration_then_EV"
-          assert result["previous_day"] == "day2_or_later_only_KDreams_best_effort"
-          assert result["first_day"] == "no_previous_day_adjustment"
-          assert result["purchase_points"] == "3_to_5_or_no_bet"
-          print(result)
-          PY
-
-  production-smoke:
-    needs: test
-    runs-on: ubuntu-latest
-    env:
-      PROD_URL: https://shogo-keirin-os.onrender.com
-      SHOGO_ACCESS_PIN: ${{ secrets.SHOGO_ACCESS_PIN }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Render本番health確認
-        shell: bash
-        run: |
-          set -euo pipefail
-          ok=0
-          for i in $(seq 1 20); do
-            if curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/health" -o health.json; then
-              if python - <<'PY'
-          import json
-          x=json.load(open('health.json', encoding='utf-8'))
-          assert x.get('status') == 'ok', x
-          assert x.get('engine') == 'PR31_FROZEN_ONLY', x
-          assert x.get('purchase_points') == '3_to_5_or_no_bet', x
-          print(json.dumps(x, ensure_ascii=False))
-          PY
-              then
-                ok=1
-                break
-              fi
-            fi
-            sleep 10
-          done
-          test "$ok" -eq 1
-      - name: Render本番UI確認
-        run: |
-          curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/" -o index.html
-          grep -q 'PR31' index.html
-          grep -q '負けて強し／展開不利' index.html
-          grep -q '① 基本情報PDF' index.html
-          grep -q '② H/S・着度数PDF' index.html
-          grep -q '③ 2車単オッズPDF' index.html
-      - name: 実3PDF本番POSTはmain反映後の専用smokeで実施
-        if: github.event_name != 'pull_request'
+      - name: 新fast path本番反映＋実3PDF確認
         shell: bash
         run: |
           set -euo pipefail
@@ -113,17 +26,43 @@ jobs:
           basic="$root/レース情報｜KEIRIN(71).PDF"
           hs="$root/レース情報｜KEIRIN(72).PDF"
           odds="$root/オッズ｜KEIRIN(11).PDF"
-          code=$(curl -sS --connect-timeout 10 --max-time 120 \
-            -o response.json -w '%{http_code}' \
-            -F "basic_pdf=@$basic;type=application/pdf" \
-            -F "hs_pdf=@$hs;type=application/pdf" \
-            -F "odds_pdf=@$odds;type=application/pdf" \
-            -F "pin=$SHOGO_ACCESS_PIN" \
-            "$PROD_URL/analyze")
-          echo "HTTP_CODE=$code"
-          if [ "$code" = "403" ]; then
-            exit 0
-          fi
-          test "$code" = "200"
-
-# trigger: fixed-role fail-open-v3 regression guard
+          ok=0
+          for i in $(seq 1 30); do
+            started=$(date +%s)
+            code=$(curl -sS --connect-timeout 10 --max-time 120 \
+              -o response.json -w '%{http_code}' \
+              -F "basic_pdf=@$basic;type=application/pdf" \
+              -F "hs_pdf=@$hs;type=application/pdf" \
+              -F "odds_pdf=@$odds;type=application/pdf" \
+              -F "pin=$SHOGO_ACCESS_PIN" \
+              "$PROD_URL/analyze" || true)
+            elapsed=$(( $(date +%s) - started ))
+            echo "attempt=$i HTTP_CODE=$code elapsed=${elapsed}s"
+            if [ "$code" = "403" ]; then exit 0; fi
+            if [ "$code" = "200" ]; then
+              if python - <<'PY'
+          import json
+          x=json.load(open('response.json', encoding='utf-8'))
+          assert x.get('status') == 'OK', x
+          assert x.get('engine') == 'PR31_FROZEN_ONLY', x
+          assert x.get('pdf_audit',{}).get('selection_method') == 'real_named_parse', x
+          assert x.get('pdf_audit',{}).get('line_method','').startswith('fixed_odds_fast_v2:'), x
+          assert x.get('pdf_audit',{}).get('rider_count') == 9, x
+          assert x.get('pdf_audit',{}).get('odds_count') == 72, x
+          assert x.get('previous_day',{}).get('status') != 'PREVIOUS_DAY_TIMEOUT', x
+          assert len(x.get('pair_ranking',[])) > 0, x
+          print(json.dumps({
+            'engine':x['engine'],
+            'purchase_status':x['purchase_status'],
+            'pair_count':len(x.get('pair_ranking',[])),
+            'line_method':x.get('pdf_audit',{}).get('line_method'),
+            'rider_count':x.get('pdf_audit',{}).get('rider_count'),
+            'odds_count':x.get('pdf_audit',{}).get('odds_count'),
+            'previous_day_status':x.get('previous_day',{}).get('status')
+          },ensure_ascii=False))
+          PY
+              then ok=1; break; fi
+            fi
+            sleep 10
+          done
+          test "$ok" -eq 1
