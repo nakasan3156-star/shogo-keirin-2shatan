@@ -57,6 +57,7 @@ jobs:
           assert result["ui_upload_mode"] == "fixed_roles_v1"
           assert result["lineup_resolver"] == "resilient_v1"
           assert result["previous_day_resolver"] == "fail_open_v3"
+          assert result["previous_day_schedule"] == "overlap_v4"
           assert result["current_race_result_page"] == "forbidden"
           assert result["selection_method"] == "PR31_probability_then_conditional_exacta_then_calibration_then_EV"
           assert result["previous_day"] == "day2_or_later_only_KDreams_best_effort"
@@ -126,4 +127,4 @@ jobs:
           fi
           test "$code" = "200"
 
-# trigger: fixed-role fail-open-v3 regression guard
+# trigger: history overlap-v4 regression guard
