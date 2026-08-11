@@ -111,5 +111,6 @@ def test_real_three_pdf_fastapi_returns_200_and_ui_binds_pr31_results() -> None:
         assert "負けて強し" not in html.text
         assert "展開不利" not in html.text
         assert "data.pair_ranking" in html.text
-        assert "EV上位5点" in html.text
+        assert "おすすめ買い順5点" in html.text
+        assert "calibrated_probability)>=0.03" in html.text
         assert "data.previous_day" not in html.text
