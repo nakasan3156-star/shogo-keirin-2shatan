@@ -57,12 +57,10 @@ jobs:
           assert result["ui_upload_mode"] == "fixed_roles_v1"
           assert result["lineup_resolver"] == "resilient_v1"
           assert result["runtime_memory_guard"] == "model_singleton_pdf_cache_per_request_v1"
-          assert result["previous_day_resolver"] == "fail_open_v3"
-          assert result["previous_day_schedule"] == "overlap_v4"
-          assert result["current_race_result_page"] == "forbidden"
+          assert result["prediction_inputs"] == "KEIRIN_JP_3PDF_ONLY"
+          assert result["previous_day_features"] == "removed"
+          assert result["external_web_lookup"] == "disabled"
           assert result["selection_method"] == "PR31_probability_then_conditional_exacta_then_calibration_then_EV"
-          assert result["previous_day"] == "day2_or_later_only_KDreams_best_effort"
-          assert result["first_day"] == "no_previous_day_adjustment"
           assert result["purchase_points"] == "3_to_5_or_no_bet"
           print(result)
           PY
@@ -102,7 +100,6 @@ jobs:
         run: |
           curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/" -o index.html
           grep -q 'PR31' index.html
-          grep -q '負けて強し／展開不利' index.html
           grep -q '① 基本情報PDF' index.html
           grep -q '② H/S・着度数PDF' index.html
           grep -q '③ 2車単オッズPDF' index.html
@@ -128,4 +125,4 @@ jobs:
           fi
           test "$code" = "200"
 
-# trigger: runtime-memory-v5 regression guard
+# trigger: pdf-only-pr31 regression guard
