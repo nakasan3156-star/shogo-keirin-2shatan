@@ -56,6 +56,7 @@ jobs:
           assert result["c_strategy"] == "removed"
           assert result["ui_upload_mode"] == "fixed_roles_v1"
           assert result["lineup_resolver"] == "resilient_v1"
+          assert result["runtime_memory_guard"] == "model_singleton_pdf_cache_per_request_v1"
           assert result["previous_day_resolver"] == "fail_open_v3"
           assert result["previous_day_schedule"] == "overlap_v4"
           assert result["current_race_result_page"] == "forbidden"
@@ -127,4 +128,4 @@ jobs:
           fi
           test "$code" = "200"
 
-# trigger: history overlap-v4 regression guard
+# trigger: runtime-memory-v5 regression guard
