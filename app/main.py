@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from individual_api import pr31_runtime
 from individual_api.keirin_line_runtime_fix import install_line_parser_fix
 from individual_api.keirin_odds_runtime_fix import install_odds_parser_fix
 from individual_api.keirin_pdf_adapter import PdfInputError, _input_error
@@ -19,7 +20,6 @@ install_odds_parser_fix()
 from individual_api.keirin_real_pdf_adapter import normalize_real_bundle
 from individual_api.named_bundle import normalize_named_bundle
 from individual_api.error_resilience import install_error_resilience
-from individual_api.history_prefetch import install_history_prefetch
 from individual_api.runtime_memory_guard import (
     clear_pdf_text_cache,
     install_runtime_memory_guard,
@@ -29,7 +29,27 @@ from .bundle_ui import INDEX_HTML
 install_line_parser_fix()
 install_error_resilience()
 install_runtime_memory_guard()
-install_history_prefetch()
+
+
+def _disabled_previous_day(
+    venue: str | None,
+    race_date: str | None,
+    day_no: int,
+    race_no: int,
+    rider_names: list[str],
+) -> dict[str, Any]:
+    """PR31 API is PDF-only: never perform an external previous-day lookup."""
+    return {
+        "status": "DISABLED",
+        "source": None,
+        "resolved_day_no": day_no if day_no >= 1 else 3,
+        "riders": {},
+    }
+
+
+# production_runtime_fix historically installed a KDreams resolver. Override it
+# after all runtime installers so API requests are guaranteed to be web-free.
+pr31_runtime.fetch_previous_day = _disabled_previous_day
 
 app = FastAPI(title="章悟式∞競輪OS PR31 API", version=VERSION)
 MAX_PDF_BYTES = 25 * 1024 * 1024
@@ -62,13 +82,10 @@ def health() -> dict[str, Any]:
         "lineup_resolver": "resilient_v1",
         "runtime_memory_guard": "model_singleton_pdf_cache_per_request_v1",
         "selection_method": "PR31_probability_then_conditional_exacta_then_calibration_then_EV",
-        "previous_day": "day2_or_later_only_KDreams_best_effort",
-        "previous_day_resolver": "fail_open_v3",
-        "previous_day_schedule": "overlap_v4",
-        "current_race_result_page": "forbidden",
-        "first_day": "no_previous_day_adjustment",
+        "prediction_inputs": "KEIRIN_JP_3PDF_ONLY",
+        "previous_day_features": "removed",
+        "external_web_lookup": "disabled",
         "purchase_points": "3_to_5_or_no_bet",
-        "missing_previous_day": "continue_without_fabrication",
     }
 
 
@@ -119,6 +136,7 @@ async def _run_bundle(files: list[UploadFile], *, named_roles: bool = False) -> 
                 basic_path = next(path for path in saved if path.name == basic_name)
             payload["race_type"] = "MEN"
             result = predict_pr31(payload, pdf_audit, basic_path)
+            result.pop("previous_day", None)
             result["pdf_audit"] = pdf_audit
         except PdfInputError as exc:
             result = _input_error(exc)

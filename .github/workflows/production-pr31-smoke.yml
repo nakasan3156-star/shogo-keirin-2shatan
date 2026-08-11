@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Render本番がPR31へ反映されるまで確認
+      - name: Render本番health確認
         shell: bash
         run: |
           set -euo pipefail
@@ -38,13 +38,11 @@ import json, os
 x=json.load(open('health.json', encoding='utf-8'))
 assert x.get('status') == 'ok', x
 assert x.get('engine') == 'PR31_FROZEN_ONLY', x
-assert x.get('a_strategy') == 'removed', x
-assert x.get('c_strategy') == 'removed', x
 assert x.get('purchase_points') == '3_to_5_or_no_bet', x
-assert x.get('current_race_result_page') == 'forbidden', x
 if os.getenv('GITHUB_EVENT_NAME') != 'pull_request':
-    assert x.get('lineup_resolver') == 'resilient_v1', x
-    assert x.get('previous_day_resolver') == 'fail_open_v3', x
+    assert x.get('prediction_inputs') == 'KEIRIN_JP_3PDF_ONLY', x
+    assert x.get('previous_day_features') == 'removed', x
+    assert x.get('external_web_lookup') == 'disabled', x
     assert x.get('ui_upload_mode') == 'fixed_roles_v1', x
 print(json.dumps(x, ensure_ascii=False))
 PY
@@ -67,9 +65,14 @@ PY
               if grep -q '① 基本情報PDF' index.html \
                 && grep -q '② H/S・着度数PDF' index.html \
                 && grep -q '③ 2車単オッズPDF' index.html \
-                && grep -q '自動でもう一度試しています' index.html \
-                && ! grep -q 'A方式・C方式：撤廃' index.html; then
-                if [ "$GITHUB_EVENT_NAME" = "pull_request" ] || grep -q '前日情報なし（PR31単体で計算）' index.html; then
+                && grep -q 'PR31' index.html; then
+                if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+                  ok=1
+                  break
+                fi
+                if grep -q '競輪.jpの3PDFのみで計算' index.html \
+                  && ! grep -q '負けて強し' index.html \
+                  && ! grep -q '展開不利' index.html; then
                   ok=1
                   break
                 fi
@@ -90,6 +93,7 @@ PY
           odds="$root/オッズ｜KEIRIN(11).PDF"
           ok=0
           for i in $(seq 1 20); do
+            started=$(date +%s)
             code=$(curl -sS --connect-timeout 10 --max-time 120 \
               -o response.json -w '%{http_code}' \
               -F "basic_pdf=@$basic;type=application/pdf" \
@@ -97,9 +101,10 @@ PY
               -F "odds_pdf=@$odds;type=application/pdf" \
               -F "pin=$SHOGO_ACCESS_PIN" \
               "$PROD_URL/analyze" || true)
-            echo "attempt=$i HTTP_CODE=$code"
+            elapsed=$(( $(date +%s) - started ))
+            echo "attempt=$i HTTP_CODE=$code elapsed=${elapsed}s"
             if [ "$code" = "403" ]; then
-              echo '本番はPIN保護中。health/UI確認済み、GitHub側PIN未設定のため3PDF POSTのみスキップ。'
+              echo '本番はPIN保護中。GitHub側PIN未設定のため3PDF POSTのみスキップ。'
               exit 0
             fi
             if [ "$code" = "200" ]; then
@@ -110,19 +115,19 @@ assert x.get('status') == 'OK', x
 assert x.get('engine') == 'PR31_FROZEN_ONLY', x
 assert x.get('purchase_status') in {'BET','NO_BET'}, x
 assert len(x.get('pair_ranking', [])) > 0, x
+assert 'previous_day' not in x, x
 assert x.get('pdf_audit', {}).get('selection_method') == 'real_named_parse', x
+assert x.get('pdf_audit', {}).get('web_data_used') is False, x
 assert x.get('pdf_audit', {}).get('rider_count') == 9, x
 assert x.get('pdf_audit', {}).get('odds_count') == 72, x
-assert x.get('previous_day', {}).get('status') != 'PREVIOUS_DAY_TIMEOUT', x
 print(json.dumps({
   'engine': x['engine'],
   'purchase_status': x['purchase_status'],
   'day_no': x.get('race',{}).get('day_no'),
   'pair_count': len(x.get('pair_ranking',[])),
-  'selection_method': x.get('pdf_audit',{}).get('selection_method'),
   'rider_count': x.get('pdf_audit',{}).get('rider_count'),
   'odds_count': x.get('pdf_audit',{}).get('odds_count'),
-  'previous_day_status': x.get('previous_day',{}).get('status'),
+  'previous_day_present': 'previous_day' in x,
 }, ensure_ascii=False))
 PY
               then

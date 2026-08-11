@@ -10,9 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from . import keirin_real_pdf_adapter as real
-from .history_prefetch import prefetch_previous_day
 from .keirin_pdf_adapter import PdfInputError
-from .previous_day_kdreams import detect_day_no
 
 
 def _parse_fixed_role_lines(
@@ -46,21 +44,10 @@ def normalize_named_bundle(
     hs_path = Path(hs_pdf)
     odds_path = Path(odds_pdf)
 
-    # Basic PDF must be parsed first for the exact rider names used by PR31.
-    # As soon as those names are validated, launch the unchanged production
-    # previous-day fetch while the remaining PDFs are parsed.
     basic_text = real._extract_text(basic_path, basic_path.name)
     basic_identity = real._identity(basic_text, basic_path.name)
     riders = real.parse_basic_real(basic_text, basic_path)
     bikes = [int(rider["bike"]) for rider in riders]
-    rider_names = [str(rider["name"]) for rider in riders]
-    history_prefetch_started = prefetch_previous_day(
-        basic_identity.get("venue"),
-        basic_identity.get("date"),
-        detect_day_no(basic_text),
-        int(basic_identity.get("race") or 0),
-        rider_names,
-    )
 
     hs_text = real._extract_text(hs_path, hs_path.name)
     odds_text = real._extract_text(odds_path, odds_path.name)
@@ -123,7 +110,6 @@ def normalize_named_bundle(
     audit = {
         "race": identity,
         "selection_method": "real_named_parse",
-        "history_schedule": "overlap_v4" if history_prefetch_started else "inline_fallback",
         "selected": {
             "basic": basic_path.name,
             "hs": hs_path.name,

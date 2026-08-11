@@ -66,11 +66,9 @@ def test_real_three_pdf_normalization_and_pr31(monkeypatch) -> None:
     assert len(result["riders"]) == 9
     assert len(result["pair_ranking"]) > 0
     assert all("ev" in item for item in result["pair_ranking"])
-    assert result["previous_day"]["status"] == "PREVIOUS_DAY_NOT_FOUND"
 
 
-def test_real_three_pdf_fastapi_returns_200_and_ui_binds_pr31_results(monkeypatch) -> None:
-    monkeypatch.setattr("individual_api.pr31_runtime.fetch_previous_day", _no_network_previous)
+def test_real_three_pdf_fastapi_returns_200_and_ui_binds_pr31_results() -> None:
     with TestClient(app) as client:
         basic_handle, hs_handle, odds_handle = BASIC.open("rb"), HS.open("rb"), ODDS.open("rb")
         try:
@@ -98,7 +96,7 @@ def test_real_three_pdf_fastapi_returns_200_and_ui_binds_pr31_results(monkeypatc
         assert body["pdf_audit"]["lines"] == EXPECTED_LINES
         assert body["pdf_audit"]["rider_count"] == 9
         assert body["pdf_audit"]["odds_count"] == 72
-        assert body["previous_day"]["status"] == "PREVIOUS_DAY_NOT_FOUND"
+        assert "previous_day" not in body
         assert len(body["pair_ranking"]) > 0
         assert all("ev" in item for item in body["pair_ranking"])
 
@@ -110,6 +108,7 @@ def test_real_three_pdf_fastapi_returns_200_and_ui_binds_pr31_results(monkeypatc
         assert "② H/S・着度数PDF" in html.text
         assert "③ 2車単オッズPDF" in html.text
         assert "fetch('/analyze'" in html.text
-        assert "負けて強し／展開不利" in html.text
+        assert "負けて強し" not in html.text
+        assert "展開不利" not in html.text
         assert "data.selections" in html.text
-        assert "data.previous_day" in html.text
+        assert "data.previous_day" not in html.text
