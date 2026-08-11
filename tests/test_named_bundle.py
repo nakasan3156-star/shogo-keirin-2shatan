@@ -24,6 +24,8 @@ def _no_network_previous(*_args, **_kwargs) -> dict:
 def test_named_bundle_parses_each_fixed_role_directly() -> None:
     payload, audit = normalize_named_bundle(BASIC, HS, ODDS)
     assert audit["selection_method"] == "real_named_parse"
+    assert audit["basic_parse_method"] == "text_fast_v3"
+    assert audit["hs_parse_method"] == "text_fast_v3"
     assert audit["rider_count"] == 9
     assert audit["odds_count"] == 72
     assert audit["lines"] == EXPECTED_LINES
@@ -49,6 +51,8 @@ def test_named_fastapi_path_returns_pr31(monkeypatch) -> None:
     assert body["status"] == "OK"
     assert body["engine"] == "PR31_FROZEN_ONLY"
     assert body["pdf_audit"]["selection_method"] == "real_named_parse"
+    assert body["pdf_audit"]["basic_parse_method"] == "text_fast_v3"
+    assert body["pdf_audit"]["hs_parse_method"] == "text_fast_v3"
     assert body["pdf_audit"]["rider_count"] == 9
     assert body["pdf_audit"]["odds_count"] == 72
     assert body["pdf_audit"]["lines"] == EXPECTED_LINES
