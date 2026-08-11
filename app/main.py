@@ -20,10 +20,15 @@ from individual_api.keirin_real_pdf_adapter import normalize_real_bundle
 from individual_api.named_bundle import normalize_named_bundle
 from individual_api.error_resilience import install_error_resilience
 from individual_api.history_prefetch import install_history_prefetch
+from individual_api.runtime_memory_guard import (
+    clear_pdf_text_cache,
+    install_runtime_memory_guard,
+)
 from .bundle_ui import INDEX_HTML
 
 install_line_parser_fix()
 install_error_resilience()
+install_runtime_memory_guard()
 install_history_prefetch()
 
 app = FastAPI(title="章悟式∞競輪OS PR31 API", version=VERSION)
@@ -55,6 +60,7 @@ def health() -> dict[str, Any]:
         "upload_mode": "keirin_jp_three_pdfs_auto_detect",
         "ui_upload_mode": "fixed_roles_v1",
         "lineup_resolver": "resilient_v1",
+        "runtime_memory_guard": "model_singleton_pdf_cache_per_request_v1",
         "selection_method": "PR31_probability_then_conditional_exacta_then_calibration_then_EV",
         "previous_day": "day2_or_later_only_KDreams_best_effort",
         "previous_day_resolver": "fail_open_v3",
@@ -140,6 +146,8 @@ async def _run_bundle(files: list[UploadFile], *, named_roles: bool = False) -> 
                     "missing": [],
                 },
             }
+        finally:
+            clear_pdf_text_cache()
         return JSONResponse(
             status_code=200 if result.get("status") == "OK" else 422,
             content=result,
