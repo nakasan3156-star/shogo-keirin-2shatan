@@ -86,6 +86,10 @@ jobs:
           assert x.get('status') == 'ok', x
           assert x.get('engine') == 'PR31_FROZEN_ONLY', x
           assert x.get('purchase_points') == '3_to_5_or_no_bet', x
+          assert x.get('prediction_inputs') == 'KEIRIN_JP_3PDF_ONLY', x
+          assert x.get('previous_day_features') == 'removed', x
+          assert x.get('external_web_lookup') == 'disabled', x
+          assert x.get('ui_upload_mode') == 'fixed_roles_v1', x
           print(json.dumps(x, ensure_ascii=False))
           PY
               then
@@ -103,8 +107,10 @@ jobs:
           grep -q '① 基本情報PDF' index.html
           grep -q '② H/S・着度数PDF' index.html
           grep -q '③ 2車単オッズPDF' index.html
-      - name: 実3PDF本番POSTはmain反映後の専用smokeで実施
-        if: github.event_name != 'pull_request'
+          grep -q '競輪.jpの3PDFのみで計算' index.html
+          ! grep -q '負けて強し' index.html
+          ! grep -q '展開不利' index.html
+      - name: 実3PDFを本番へ3回連続POST
         shell: bash
         run: |
           set -euo pipefail
@@ -112,17 +118,33 @@ jobs:
           basic="$root/レース情報｜KEIRIN(71).PDF"
           hs="$root/レース情報｜KEIRIN(72).PDF"
           odds="$root/オッズ｜KEIRIN(11).PDF"
-          code=$(curl -sS --connect-timeout 10 --max-time 120 \
-            -o response.json -w '%{http_code}' \
-            -F "basic_pdf=@$basic;type=application/pdf" \
-            -F "hs_pdf=@$hs;type=application/pdf" \
-            -F "odds_pdf=@$odds;type=application/pdf" \
-            -F "pin=$SHOGO_ACCESS_PIN" \
-            "$PROD_URL/analyze")
-          echo "HTTP_CODE=$code"
-          if [ "$code" = "403" ]; then
-            exit 0
-          fi
-          test "$code" = "200"
+          for n in 1 2 3; do
+            started=$(date +%s)
+            code=$(curl -sS --connect-timeout 10 --max-time 120 \
+              -o "response-$n.json" -w '%{http_code}' \
+              -F "basic_pdf=@$basic;type=application/pdf" \
+              -F "hs_pdf=@$hs;type=application/pdf" \
+              -F "odds_pdf=@$odds;type=application/pdf" \
+              -F "pin=$SHOGO_ACCESS_PIN" \
+              "$PROD_URL/analyze")
+            elapsed=$(( $(date +%s) - started ))
+            echo "attempt=$n HTTP_CODE=$code elapsed=${elapsed}s"
+            test "$code" = "200"
+            N="$n" python - <<'PY'
+          import json, os
+          n=os.environ['N']
+          x=json.load(open(f'response-{n}.json', encoding='utf-8'))
+          assert x.get('status') == 'OK', x
+          assert x.get('engine') == 'PR31_FROZEN_ONLY', x
+          assert x.get('purchase_status') in {'BET','NO_BET'}, x
+          assert len(x.get('pair_ranking', [])) > 0, x
+          assert 'previous_day' not in x, x
+          assert x.get('pdf_audit', {}).get('selection_method') == 'real_named_parse', x
+          assert x.get('pdf_audit', {}).get('web_data_used') is False, x
+          assert x.get('pdf_audit', {}).get('rider_count') == 9, x
+          assert x.get('pdf_audit', {}).get('odds_count') == 72, x
+          print(json.dumps({'attempt': n, 'purchase_status': x['purchase_status'], 'pair_count': len(x['pair_ranking'])}, ensure_ascii=False))
+          PY
+          done
 
-# trigger: pdf-only-pr31 regression guard
+# temporary production verification only; do not merge
