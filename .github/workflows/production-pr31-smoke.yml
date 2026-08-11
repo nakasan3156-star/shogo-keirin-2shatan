@@ -34,16 +34,15 @@ jobs:
           for i in $(seq 1 40); do
             if curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/health" -o health.json; then
               if python - <<'PY'
-import json, os
+import json
 x=json.load(open('health.json', encoding='utf-8'))
 assert x.get('status') == 'ok', x
 assert x.get('engine') == 'PR31_FROZEN_ONLY', x
 assert x.get('purchase_points') == '3_to_5_or_no_bet', x
-if os.getenv('GITHUB_EVENT_NAME') != 'pull_request':
-    assert x.get('prediction_inputs') == 'KEIRIN_JP_3PDF_ONLY', x
-    assert x.get('previous_day_features') == 'removed', x
-    assert x.get('external_web_lookup') == 'disabled', x
-    assert x.get('ui_upload_mode') == 'fixed_roles_v1', x
+assert x.get('prediction_inputs') == 'KEIRIN_JP_3PDF_ONLY', x
+assert x.get('previous_day_features') == 'removed', x
+assert x.get('external_web_lookup') == 'disabled', x
+assert x.get('ui_upload_mode') == 'fixed_roles_v1', x
 print(json.dumps(x, ensure_ascii=False))
 PY
               then
@@ -65,17 +64,12 @@ PY
               if grep -q '① 基本情報PDF' index.html \
                 && grep -q '② H/S・着度数PDF' index.html \
                 && grep -q '③ 2車単オッズPDF' index.html \
-                && grep -q 'PR31' index.html; then
-                if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-                  ok=1
-                  break
-                fi
-                if grep -q '競輪.jpの3PDFのみで計算' index.html \
-                  && ! grep -q '負けて強し' index.html \
-                  && ! grep -q '展開不利' index.html; then
-                  ok=1
-                  break
-                fi
+                && grep -q 'PR31' index.html \
+                && grep -q '競輪.jpの3PDFのみで計算' index.html \
+                && ! grep -q '負けて強し' index.html \
+                && ! grep -q '展開不利' index.html; then
+                ok=1
+                break
               fi
             fi
             sleep 15
@@ -83,7 +77,6 @@ PY
           test "$ok" -eq 1
 
       - name: 実3PDFを本番UI経路へ投入
-        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           set -euo pipefail
@@ -103,10 +96,6 @@ PY
               "$PROD_URL/analyze" || true)
             elapsed=$(( $(date +%s) - started ))
             echo "attempt=$i HTTP_CODE=$code elapsed=${elapsed}s"
-            if [ "$code" = "403" ]; then
-              echo '本番はPIN保護中。GitHub側PIN未設定のため3PDF POSTのみスキップ。'
-              exit 0
-            fi
             if [ "$code" = "200" ]; then
               if python - <<'PY'
 import json
@@ -137,4 +126,8 @@ PY
             fi
             sleep 10
           done
+          if [ "$ok" -ne 1 ]; then
+            echo 'production /analyze smoke failed'
+            cat response.json || true
+          fi
           test "$ok" -eq 1
