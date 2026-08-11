@@ -27,6 +27,8 @@ def test_named_bundle_parses_each_fixed_role_directly() -> None:
     assert audit["rider_count"] == 9
     assert audit["odds_count"] == 72
     assert audit["lines"] == EXPECTED_LINES
+    assert audit["line_source"].endswith(ODDS.name)
+    assert audit["line_method"].startswith("fixed_odds_fast_v2:")
     assert len(payload["riders"]) == 9
 
 
@@ -50,3 +52,4 @@ def test_named_fastapi_path_returns_pr31(monkeypatch) -> None:
     assert body["pdf_audit"]["rider_count"] == 9
     assert body["pdf_audit"]["odds_count"] == 72
     assert body["pdf_audit"]["lines"] == EXPECTED_LINES
+    assert body["pdf_audit"]["line_method"].startswith("fixed_odds_fast_v2:")
