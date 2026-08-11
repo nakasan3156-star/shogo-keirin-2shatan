@@ -63,11 +63,9 @@ def test_ss_grade_real_three_pdf_normalization_and_pr31(monkeypatch) -> None:
     assert len(result["riders"]) == 9
     assert len(result["pair_ranking"]) > 0
     assert all("ev" in item for item in result["pair_ranking"])
-    assert result["previous_day"]["status"] == "PREVIOUS_DAY_NOT_FOUND"
 
 
-def test_ss_grade_real_three_pdf_fastapi_returns_200_with_pr31(monkeypatch) -> None:
-    monkeypatch.setattr("individual_api.pr31_runtime.fetch_previous_day", _no_network_previous)
+def test_ss_grade_real_three_pdf_fastapi_returns_200_with_pr31() -> None:
     with TestClient(app) as client:
         handles = [ODDS.open("rb"), BASIC.open("rb"), HS.open("rb")]
         try:
@@ -93,6 +91,6 @@ def test_ss_grade_real_three_pdf_fastapi_returns_200_with_pr31(monkeypatch) -> N
     assert body["pdf_audit"]["rider_count"] == 9
     assert body["pdf_audit"]["odds_count"] == 72
     assert body["pdf_audit"]["lines"] == EXPECTED_LINES
-    assert body["previous_day"]["status"] == "PREVIOUS_DAY_NOT_FOUND"
+    assert "previous_day" not in body
     assert len(body["pair_ranking"]) > 0
     assert all("ev" in item for item in body["pair_ranking"])
