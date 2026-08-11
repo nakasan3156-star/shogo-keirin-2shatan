@@ -19,10 +19,12 @@ install_odds_parser_fix()
 from individual_api.keirin_real_pdf_adapter import normalize_real_bundle
 from individual_api.named_bundle import normalize_named_bundle
 from individual_api.error_resilience import install_error_resilience
+from individual_api.history_prefetch import install_history_prefetch
 from .bundle_ui import INDEX_HTML
 
 install_line_parser_fix()
 install_error_resilience()
+install_history_prefetch()
 
 app = FastAPI(title="章悟式∞競輪OS PR31 API", version=VERSION)
 MAX_PDF_BYTES = 25 * 1024 * 1024
@@ -56,6 +58,7 @@ def health() -> dict[str, Any]:
         "selection_method": "PR31_probability_then_conditional_exacta_then_calibration_then_EV",
         "previous_day": "day2_or_later_only_KDreams_best_effort",
         "previous_day_resolver": "fail_open_v3",
+        "previous_day_schedule": "overlap_v4",
         "current_race_result_page": "forbidden",
         "first_day": "no_previous_day_adjustment",
         "purchase_points": "3_to_5_or_no_bet",
