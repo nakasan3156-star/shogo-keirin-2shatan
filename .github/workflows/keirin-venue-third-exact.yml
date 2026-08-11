@@ -1,0 +1,41 @@
+name: 場攻略 3番手3着ちょうど
+on:
+  pull_request:
+    paths:
+      - "historical_pipeline/venue_third_exact.py"
+      - ".github/workflows/keirin-venue-third-exact.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  GH_TOKEN: ${{ github.token }}
+jobs:
+  exact-third:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r historical_pipeline/requirements-historical.txt
+      - name: データセット取得
+        run: |
+          mkdir -p train external
+          gh release download keirin-data-2025 --pattern keirin_2025_dataset.zip
+          gh release download keirin-pr31-frozen-2026-01-02 --pattern keirin_2026_01_02_dataset.zip
+          unzip -q keirin_2025_dataset.zip -d train_unpack
+          unzip -q keirin_2026_01_02_dataset.zip -d external_unpack
+          cp -R train_unpack/dataset/. train/
+          cp -R external_unpack/dataset_2026/. external/
+      - name: 3番手3着ちょうど率
+        run: |
+          python historical_pipeline/venue_third_exact.py --train-dir train --external-dir external --output-dir venue_third_exact | tee venue_third_exact.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: keirin-venue-third-exact
+          path: |
+            venue_third_exact
+            venue_third_exact.log
+          retention-days: 30
