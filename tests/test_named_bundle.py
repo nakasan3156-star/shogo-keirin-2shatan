@@ -2,7 +2,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from app.main import app
+from app.main import app, health
 from individual_api.named_bundle import normalize_named_bundle
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "keirin_jp" / "2026-08-03_odawara_4r"
@@ -12,20 +12,11 @@ ODDS = FIXTURE_ROOT / "オッズ｜KEIRIN(11).PDF"
 EXPECTED_LINES = [[1, 5], [2], [3, 9, 7], [6], [8, 4]]
 
 
-def _no_network_previous(*_args, **_kwargs) -> dict:
-    return {
-        "status": "PREVIOUS_DAY_NOT_FOUND",
-        "source": "KDreams",
-        "resolved_day_no": 3,
-        "riders": {},
-    }
-
-
-def test_named_bundle_parses_each_fixed_role_directly(monkeypatch) -> None:
-    monkeypatch.setattr("individual_api.named_bundle.prefetch_previous_day", lambda *_args, **_kwargs: False)
+def test_named_bundle_parses_each_fixed_role_directly() -> None:
     payload, audit = normalize_named_bundle(BASIC, HS, ODDS)
     assert audit["selection_method"] == "real_named_parse"
-    assert audit["history_schedule"] == "inline_fallback"
+    assert "history_schedule" not in audit
+    assert audit["web_data_used"] is False
     assert audit["rider_count"] == 9
     assert audit["odds_count"] == 72
     assert audit["lines"] == EXPECTED_LINES
@@ -34,8 +25,15 @@ def test_named_bundle_parses_each_fixed_role_directly(monkeypatch) -> None:
     assert len(payload["riders"]) == 9
 
 
-def test_named_fastapi_path_returns_pr31(monkeypatch) -> None:
-    monkeypatch.setattr("individual_api.pr31_runtime.fetch_previous_day", _no_network_previous)
+def test_health_declares_pdf_only_runtime() -> None:
+    result = health()
+    assert result["engine"] == "PR31_FROZEN_ONLY"
+    assert result["prediction_inputs"] == "KEIRIN_JP_3PDF_ONLY"
+    assert result["previous_day_features"] == "removed"
+    assert result["external_web_lookup"] == "disabled"
+
+
+def test_named_fastapi_path_returns_pr31_without_previous_day() -> None:
     with TestClient(app) as client:
         with BASIC.open("rb") as basic, HS.open("rb") as hs, ODDS.open("rb") as odds:
             response = client.post(
@@ -50,8 +48,10 @@ def test_named_fastapi_path_returns_pr31(monkeypatch) -> None:
     body = response.json()
     assert body["status"] == "OK"
     assert body["engine"] == "PR31_FROZEN_ONLY"
+    assert "previous_day" not in body
     assert body["pdf_audit"]["selection_method"] == "real_named_parse"
-    assert body["pdf_audit"]["history_schedule"] == "overlap_v4"
+    assert "history_schedule" not in body["pdf_audit"]
+    assert body["pdf_audit"]["web_data_used"] is False
     assert body["pdf_audit"]["rider_count"] == 9
     assert body["pdf_audit"]["odds_count"] == 72
     assert body["pdf_audit"]["lines"] == EXPECTED_LINES
