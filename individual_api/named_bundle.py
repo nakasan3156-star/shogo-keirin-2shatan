@@ -6,11 +6,68 @@ exactly once. PR31 prediction logic is not changed.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
 from . import keirin_real_pdf_adapter as real
 from .keirin_pdf_adapter import PdfInputError
+
+_VALID_COUNTS = {5, 6, 7, 8, 9}
+
+
+def _parse_basic_text_first(text: str, path: Path) -> tuple[list[dict[str, Any]], str]:
+    """Accept complete KEIRIN.JP text rows immediately; coordinate parse is fallback only."""
+    riders: dict[int, dict[str, Any]] = {}
+    for bike, name, raw_prefecture, style, values in real._profile_rows(text):
+        match = real._BASIC_VALUES.match(values)
+        if not match:
+            continue
+        prefecture_raw = re.sub(r"\s+", "", raw_prefecture)
+        prefecture = real._normalize_prefecture(prefecture_raw)
+        score, escape, makuri, sashi, mark, back = match.groups()
+        riders[bike] = {
+            "bike": bike,
+            "name": name,
+            "region": real.PREFECTURE_TO_REGION.get(prefecture, "未取得") if prefecture else "未取得",
+            "prefecture_raw": prefecture_raw or "未取得",
+            "style": style,
+            "score": float(score),
+            "escape": int(escape),
+            "makuri": int(makuri),
+            "sashi": int(sashi),
+            "mark": int(mark),
+            "B": int(back),
+        }
+    result = [riders[bike] for bike in sorted(riders)]
+    if len(result) in _VALID_COUNTS and [item["bike"] for item in result] == list(range(1, len(result) + 1)):
+        return result, "text_fast_v3"
+    return real.parse_basic_real(text, path), "coordinate_fallback"
+
+
+def _parse_hs_text_first(
+    text: str, bikes: list[int], path: Path
+) -> tuple[dict[int, dict[str, int | float]], str]:
+    rows: dict[int, dict[str, int | float]] = {}
+    for bike, _name, _prefecture, _style, values in real._profile_rows(text):
+        match = real._HS_VALUES.match(values)
+        if not match:
+            continue
+        first, second, third, out, h_count, s_count = map(int, match.groups())
+        total = first + second + third + out
+        rows[bike] = {
+            "first": first,
+            "second": second,
+            "third": third,
+            "out": out,
+            "H": h_count,
+            "S": s_count,
+            "win_rate": 100.0 * first / total if total else 0.0,
+            "quinella_rate": 100.0 * (first + second) / total if total else 0.0,
+        }
+    if set(rows) == set(bikes):
+        return rows, "text_fast_v3"
+    return real.parse_hs_real(text, bikes, path), "coordinate_fallback"
 
 
 def _parse_fixed_role_lines(
@@ -29,8 +86,6 @@ def _parse_fixed_role_lines(
         if line_runtime._valid(parsed, bikes):
             return parsed, odds_path.name, f"fixed_odds_fast_v2:{top.method}"
 
-    # Only if the dedicated official lineup row cannot be read do we pay for
-    # all parsers/all PDFs. This keeps existing resilience for unusual PDFs.
     return line_runtime.parse_lines_from_pdfs(
         [odds_path, basic_path, hs_path], bikes
     )
@@ -72,9 +127,9 @@ def normalize_named_bundle(
             ["同じレースの3PDF"],
         )
 
-    riders = real.parse_basic_real(basic_text, basic_path)
+    riders, basic_method = _parse_basic_text_first(basic_text, basic_path)
     bikes = [int(rider["bike"]) for rider in riders]
-    hs_rows = real.parse_hs_real(hs_text, bikes, hs_path)
+    hs_rows, hs_method = _parse_hs_text_first(hs_text, bikes, hs_path)
     odds = real._parse_keirin_jp_odds_pdf(odds_path, odds_text, bikes)
 
     expected_odds = len(bikes) * (len(bikes) - 1)
@@ -115,6 +170,8 @@ def normalize_named_bundle(
     audit = {
         "race": identity,
         "selection_method": "real_named_parse",
+        "basic_parse_method": basic_method,
+        "hs_parse_method": hs_method,
         "selected": {
             "basic": basic_path.name,
             "hs": hs_path.name,
