@@ -18,14 +18,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Render本番overlap_v4反映待ち
+      - name: Render本番overlap_v4反映確認
         shell: bash
         run: |
           set -euo pipefail
-          ok=0
-          for i in $(seq 1 40); do
-            if curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/health" -o health.json; then
-              if python - <<'PY'
+          curl -fsS --connect-timeout 10 --max-time 30 "$PROD_URL/health" -o health.json
+          python - <<'PY'
           import json
           x=json.load(open('health.json', encoding='utf-8'))
           assert x.get('status') == 'ok', x
@@ -38,16 +36,8 @@ jobs:
           assert x.get('purchase_points') == '3_to_5_or_no_bet', x
           print(json.dumps(x, ensure_ascii=False))
           PY
-              then
-                ok=1
-                break
-              fi
-            fi
-            sleep 15
-          done
-          test "$ok" -eq 1
 
-      - name: 実KEIRIN.JP 3PDF本番POST
+      - name: 実KEIRIN.JP 3PDFを3回連続POST
         shell: bash
         run: |
           set -euo pipefail
@@ -55,26 +45,25 @@ jobs:
           basic="$root/レース情報｜KEIRIN(71).PDF"
           hs="$root/レース情報｜KEIRIN(72).PDF"
           odds="$root/オッズ｜KEIRIN(11).PDF"
-          ok=0
-          for i in $(seq 1 20); do
+          for i in 1 2 3; do
             started=$(date +%s)
             code=$(curl -sS --connect-timeout 10 --max-time 120 \
-              -o response.json -w '%{http_code}' \
+              -o "response-$i.json" -w '%{http_code}' \
               -F "basic_pdf=@$basic;type=application/pdf" \
               -F "hs_pdf=@$hs;type=application/pdf" \
               -F "odds_pdf=@$odds;type=application/pdf" \
               -F "pin=$SHOGO_ACCESS_PIN" \
               "$PROD_URL/analyze" || true)
             elapsed=$(( $(date +%s) - started ))
-            echo "attempt=$i HTTP_CODE=$code elapsed=${elapsed}s"
+            echo "run=$i HTTP_CODE=$code elapsed=${elapsed}s"
             if [ "$code" = "403" ]; then
               echo '本番はPIN保護中。GitHub側PIN未設定のためPOSTをスキップ。'
               exit 0
             fi
-            if [ "$code" = "200" ]; then
-              if python - <<'PY'
-          import json
-          x=json.load(open('response.json', encoding='utf-8'))
+            test "$code" = "200"
+            FILE="response-$i.json" python - <<'PY'
+          import json, os
+          x=json.load(open(os.environ['FILE'], encoding='utf-8'))
           assert x.get('status') == 'OK', x
           assert x.get('engine') == 'PR31_FROZEN_ONLY', x
           assert x.get('purchase_status') in {'BET','NO_BET'}, x
@@ -88,7 +77,6 @@ jobs:
           print(json.dumps({
             'engine': x['engine'],
             'purchase_status': x['purchase_status'],
-            'day_no': x.get('race',{}).get('day_no'),
             'pair_count': len(x.get('pair_ranking',[])),
             'history_schedule': x.get('pdf_audit',{}).get('history_schedule'),
             'line_method': x.get('pdf_audit',{}).get('line_method'),
@@ -97,11 +85,4 @@ jobs:
             'previous_day_status': x.get('previous_day',{}).get('status')
           }, ensure_ascii=False))
           PY
-              then
-                ok=1
-                break
-              fi
-            fi
-            sleep 10
           done
-          test "$ok" -eq 1
