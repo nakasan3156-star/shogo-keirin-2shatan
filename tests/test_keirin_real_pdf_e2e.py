@@ -110,5 +110,6 @@ def test_real_three_pdf_fastapi_returns_200_and_ui_binds_pr31_results() -> None:
         assert "fetch('/analyze'" in html.text
         assert "負けて強し" not in html.text
         assert "展開不利" not in html.text
-        assert "data.selections" in html.text
+        assert "data.pair_ranking" in html.text
+        assert "EV上位5点" in html.text
         assert "data.previous_day" not in html.text
