@@ -31,6 +31,13 @@ def _key(
     return venue, race_date, int(day_no), int(race_no), tuple(rider_names)
 
 
+def _source_fetch() -> Callable[..., dict[str, Any]] | None:
+    current = pr31_runtime.fetch_previous_day
+    if current is not _fetch_with_prefetch:
+        return current
+    return _BASE_FETCH
+
+
 def prefetch_previous_day(
     venue: str | None,
     race_date: str | None,
@@ -39,7 +46,8 @@ def prefetch_previous_day(
     rider_names: list[str],
 ) -> bool:
     """Start the already-installed production fetch without waiting for it."""
-    if _BASE_FETCH is None or day_no == 1:
+    source = _source_fetch()
+    if source is None or day_no == 1:
         return False
     key = _key(venue, race_date, day_no, race_no, rider_names)
     with _LOCK:
@@ -52,7 +60,7 @@ def prefetch_previous_day(
             if not old_future.done():
                 old_future.cancel()
         _FUTURES[key] = _EXECUTOR.submit(
-            _BASE_FETCH,
+            source,
             venue,
             race_date,
             day_no,
